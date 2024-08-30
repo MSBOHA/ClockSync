@@ -1,1 +1,2 @@
 # ClockSync
+f**u NVIDIA
