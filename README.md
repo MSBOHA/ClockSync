@@ -1,2 +1,1 @@
 # ClockSync
-f**u NVIDIA
