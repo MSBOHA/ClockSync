@@ -1,0 +1,3 @@
+593540 /root/timesync/ptpatr/test/aarch64/timetool
+593541 /root/timesync/ptpatr/test/aarch64/ptp4l -m -H -i eth0 -s
+593543 /root/timesync/ptpatr/cmake-build-debug/ptpatr -c 192.168.100.146 -s

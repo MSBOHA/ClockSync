@@ -1,0 +1,1 @@
+/usr/bin/c++  -static-libgcc -static-libstdc++ -static CMakeFiles/ptpatr.dir/src/main.cpp.o -o ptpatr  -lpthread 
