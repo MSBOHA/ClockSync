@@ -1,0 +1,4 @@
+605652 timetool
+605654 /root/timesync/ptpatr/test/aarch64/chronyd -d -L -1 -f /chrony/chrony.conf
+605655 ptp4l -m -H -i eth0 -s
+610693 /bin/bash /root/timesync/ptpatr/test/phccmp.sh -i eth0

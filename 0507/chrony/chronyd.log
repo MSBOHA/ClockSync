@@ -1,0 +1,6 @@
+2025-03-04T00:31:01Z chronyd version DEVELOPMENT starting (+CMDMON +NTP +REFCLOCK +RTC -PRIVDROP -SCFILTER -SIGND +ASYNCDNS -NTS -SECHASH +IPV6 -DEBUG)
+2025-03-04T00:31:01Z Running with root privileges
+2025-03-04T00:31:02Z Selected source 192.168.100.146
+2025-03-04T00:31:02Z System clock was stepped by -0.030037 seconds
+2025-03-04T00:31:02Z System clock was stepped by -0.031801 seconds
+2025-03-04T00:39:29Z chronyd exiting
