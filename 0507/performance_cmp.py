@@ -1,11 +1,12 @@
 import os
 import pandas as pd
 import matplotlib.pyplot as plt
-
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
 # 定义文件路径
-time_error_log_file_path_own = r".\0507\自有方法\timeError.log"
-time_error_log_file_path_chrony = r".\0507\chrony\timeError.log"
-ptp4l_log_file_path = r".\0507\自有方法\ptp4l.log"
+
+time_error_log_file_path_own = os.path.join("自有方法", "timeError.log")
+time_error_log_file_path_chrony = os.path.join("chrony", "timeError.log")
+ptp4l_log_file_path = os.path.join("自有方法", "ptp4l.log")
 
 # 定义一个函数来读取和处理 timeError.log 数据
 def process_time_error_log(file_path, label, color, time_range=None):
@@ -19,12 +20,11 @@ def process_time_error_log(file_path, label, color, time_range=None):
 
         # 如果提供了时间范围，则进行筛选
         if time_range:
-            filtered_data = data[(data['time'] > time_range[0]) & (data['time'] < time_range[1])]
+            filtered_data = data[(data['time'] > time_range[0]) & (data['time'] < time_range[1])].copy()
         else:
-            filtered_data = data
+            filtered_data = data.copy()
 
-        # 调整时间轴：减去第一个时间值
-        filtered_data['time'] -= filtered_data['time'].iloc[0]
+        filtered_data.loc[:, 'time'] -= filtered_data['time'].iloc[0]
 
         # 绘制筛选后的 error 随时间变化的图
         plt.plot(filtered_data['time'], filtered_data['error'], label=label, color=color)
@@ -116,6 +116,6 @@ plt.title('Comparison of Time Error and PTP Master Offset')
 plt.legend()
 plt.grid()
 #导出矢量图
-plt.savefig(r".\0507\comparison_all_metrics.svg")
-plt.savefig(r".\0507\comparison_all_metrics_adjusted.png")
+plt.savefig("comparison_all_metrics.svg")
+plt.savefig("comparison_all_metrics_adjusted.png")
 plt.show()
