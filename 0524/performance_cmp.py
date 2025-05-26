@@ -3,12 +3,13 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import glob
 import re
+import numpy as np # 确保导入 numpy
 
 # 设置当前工作目录为脚本所在目录
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 # 为错误类型日志（单列数据）设置最大数据点数量，以防数据过多影响绘图
-MAX_POINTS_FOR_ERROR_LOG = 600 # 如果单列错误日志点数超过此值，则裁剪
+MAX_POINTS_FOR_ERROR_LOG = 7000 # 如果单列错误日志点数超过此值，则裁剪
 
 def identify_log_type_and_extract_data(filepath, sample_lines_for_type_detection=30):
     """
@@ -20,104 +21,139 @@ def identify_log_type_and_extract_data(filepath, sample_lines_for_type_detection
     if not os.path.exists(filepath):
         return "not_found", None
 
-    numeric_lines_data = [] # 存储解析出的数字行
-    text_lines_count = 0    # 存储非数字、非注释的文本行数量
+    numeric_lines_data = [] 
+    single_column_error_values = [] 
     
-    lines_read_for_type = 0
-    potential_column_counts = []
+    lines_read_for_type_detection = 0
+    potential_column_counts_numeric_lines = [] 
+    header_lines_count = 0 
 
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
             all_lines = f.readlines()
 
-        # 阶段1: 类型检测 (基于文件前部内容)
-        for line_content in all_lines:
-            if lines_read_for_type >= sample_lines_for_type_detection:
-                break
-            
+        if not all_lines:
+            return "empty", None
+
+        first_numeric_line_index = -1
+
+        for idx, line_content in enumerate(all_lines):
             stripped_line = line_content.strip()
             if not stripped_line or stripped_line.startswith("//") or stripped_line.startswith("#"):
-                continue # 跳过空行和注释
+                if first_numeric_line_index == -1: 
+                    header_lines_count +=1
+                continue
 
-            lines_read_for_type += 1
             parts = stripped_line.split()
             
-            try:
-                # 尝试将所有部分转换为数字
-                [float(p) for p in parts]
-                potential_column_counts.append(len(parts))
-            except ValueError:
-                # 如果转换失败，则认为是文本说明行
-                text_lines_count +=1 
-
-        log_type = "unknown"
-        avg_cols = 0
-        if potential_column_counts:
-            avg_cols = sum(potential_column_counts) / len(potential_column_counts)
-
-        if not lines_read_for_type and not text_lines_count : 
-            is_truly_empty = True
-            for line_content in all_lines:
-                stripped_line = line_content.strip()
-                if stripped_line and not stripped_line.startswith("//") and not stripped_line.startswith("#"):
-                    is_truly_empty = False
-                    break
-            if is_truly_empty:
-                return "empty", None
-
-        if avg_cols > 1.5 and avg_cols < 2.5: 
-            log_type = "normal"
-        elif avg_cols > 0.5 and avg_cols < 1.5: 
-            log_type = "error_single_column"
-        elif text_lines_count > 0 and not potential_column_counts : 
-            log_type = "error_single_column" 
-        
-        # 阶段2: 数据提取 (基于已判断的类型)
-        if log_type == "normal":
-            for line_content in all_lines:
-                stripped_line = line_content.strip()
-                if not stripped_line or stripped_line.startswith("//") or stripped_line.startswith("#"):
-                    continue
-                parts = stripped_line.split()
-                if len(parts) == 2:
-                    try:
-                        time_val = float(parts[0])
-                        error_val = float(parts[1])
-                        numeric_lines_data.append({'time': time_val, 'error': error_val})
-                    except ValueError:
-                        pass 
-            if not numeric_lines_data: return "unknown", None 
-            return "normal", pd.DataFrame(numeric_lines_data)
-
-        elif log_type == "error_single_column":
-            error_values = []
-            for line_content in all_lines:
-                stripped_line = line_content.strip()
-                if not stripped_line or stripped_line.startswith("//") or stripped_line.startswith("#"):
-                    continue
+            if len(parts) == 1:
                 try:
-                    error_val = float(stripped_line)
-                    error_values.append(error_val)
+                    val = float(parts[0])
+                    if first_numeric_line_index == -1 and not potential_column_counts_numeric_lines:
+                         first_numeric_line_index = idx 
+                    single_column_error_values.append(val)
+                    if lines_read_for_type_detection < sample_lines_for_type_detection:
+                        potential_column_counts_numeric_lines.append(1) 
                 except ValueError:
-                    pass 
-            if not error_values: return "error_single_column", pd.DataFrame({'time': [], 'error': []}) 
+                    if first_numeric_line_index == -1: 
+                        header_lines_count +=1
+            elif len(parts) == 2: 
+                try:
+                    time_val = float(parts[0])
+                    error_val = float(parts[1])
+                    if first_numeric_line_index == -1:
+                        first_numeric_line_index = idx 
+                    if lines_read_for_type_detection < sample_lines_for_type_detection:
+                        potential_column_counts_numeric_lines.append(2)
+                    numeric_lines_data.append({'time': time_val, 'error': error_val})
+                except ValueError:
+                    if first_numeric_line_index == -1: 
+                        header_lines_count +=1
+            else: 
+                if first_numeric_line_index == -1:
+                    header_lines_count +=1
             
-            df = pd.DataFrame({'error': error_values})
+            if first_numeric_line_index != -1: 
+                 lines_read_for_type_detection += 1
+                 if lines_read_for_type_detection >= sample_lines_for_type_detection:
+                     break
+        
+        log_type = "unknown"
+        avg_cols_numeric = 0
+        if potential_column_counts_numeric_lines:
+            avg_cols_numeric = sum(potential_column_counts_numeric_lines) / len(potential_column_counts_numeric_lines)
+
+        if avg_cols_numeric > 1.5 and avg_cols_numeric < 2.5:
+            log_type = "normal"
+            # 对于 normal 类型，重新完整提取数据，而不是只用类型检测时收集的
+            full_normal_data = []
+            if first_numeric_line_index != -1: # 确保知道数据从哪里开始
+                for line_content in all_lines[first_numeric_line_index:]:
+                    stripped_line = line_content.strip()
+                    if not stripped_line or stripped_line.startswith("//") or stripped_line.startswith("#"):
+                        continue
+                    parts = stripped_line.split()
+                    if len(parts) == 2:
+                        try:
+                            time_val = float(parts[0])
+                            error_val = float(parts[1])
+                            full_normal_data.append({'time': time_val, 'error': error_val})
+                        except ValueError:
+                            # 在数据区如果遇到无法转换的双列，可以选择停止或跳过
+                            pass 
+            
+            if not full_normal_data: 
+                # 如果完整提取后还是没有数据，但类型检测时有（不太可能发生在此逻辑下，但作为保险）
+                if numeric_lines_data: # numeric_lines_data 是类型检测时收集的
+                     return "normal", pd.DataFrame(numeric_lines_data) 
+                return "unknown", None
+            return "normal", pd.DataFrame(full_normal_data)
+
+        elif single_column_error_values and (avg_cols_numeric > 0.5 and avg_cols_numeric < 1.5):
+            log_type = "error_single_column"
+        elif not potential_column_counts_numeric_lines and single_column_error_values: 
+            log_type = "error_single_column"
+
+        if log_type == "error_single_column":
+            final_error_values = []
+            if first_numeric_line_index != -1: 
+                for line_content in all_lines[first_numeric_line_index:]:
+                    stripped_line = line_content.strip()
+                    if not stripped_line or stripped_line.startswith("//") or stripped_line.startswith("#"):
+                        continue
+                    parts = stripped_line.split()
+                    if len(parts) == 1: 
+                        try:
+                            error_val = float(parts[0])
+                            final_error_values.append(error_val)
+                        except ValueError:
+                            pass 
+            
+            if not final_error_values and single_column_error_values: 
+                final_error_values = single_column_error_values
+
+            if not final_error_values:
+                return "unknown", None 
+            
+            df = pd.DataFrame({'error': final_error_values})
             df['time'] = range(len(df)) 
             return "error_single_column", df
         
-        else: 
-            if log_type == "empty": return "empty", None
-            return "unknown", None
+        if first_numeric_line_index == -1 and header_lines_count > 0 and not single_column_error_values and not numeric_lines_data:
+            return "empty", None 
+
+        return "unknown", None
 
     except Exception as e:
         print(f"  Error during type identification or data extraction for {filepath}: {e}")
         return "unknown", None
 
 
-def process_and_plot_log_file(filepath, label, color, time_range_filter=None):
+def calculate_stats_from_log(filepath, label, time_range_filter=None, skip_rows_for_single_col=10): # 新增参数
     """
-    处理单个日志文件：识别类型、提取数据、筛选、绘图和统计。
+    处理单个日志文件：识别类型、提取数据、筛选、计算统计数据。
+    :param skip_rows_for_single_col: 对于 error_single_column 类型，跳过开头的行数。
+    返回包含统计数据和DataFrame的字典，或在失败时返回None。
     """
     log_type, df = identify_log_type_and_extract_data(filepath)
 
@@ -126,104 +162,216 @@ def process_and_plot_log_file(filepath, label, color, time_range_filter=None):
     if df is None or df.empty:
         if log_type not in ["empty", "not_found"]:
              print(f"  No data extracted or file is empty/not found for {label}.")
-        return
+        return None
+
+    # --- 修改：通用化跳过行数的处理 ---
+    if log_type == "error_single_column" and skip_rows_for_single_col > 0:
+        if len(df) > skip_rows_for_single_col:
+            print(f"  Info: For {label} (single_column type), skipping first {skip_rows_for_single_col} rows.")
+            df = df.iloc[skip_rows_for_single_col:].copy()
+            df.reset_index(drop=True, inplace=True)
+            df['time'] = range(len(df)) 
+        else:
+            print(f"  Warning: For {label} (single_column type), data points ({len(df)}) are less than or equal to rows to skip ({skip_rows_for_single_col}). No rows skipped or data might be empty after skip.")
+    # --- 结束跳过行数处理 ---
 
     df['time'] = pd.to_numeric(df['time'], errors='coerce')
-    df['error'] = pd.to_numeric(df['error'], errors='coerce')
+    df['error'] = pd.to_numeric(df['error'], errors='coerce')    
+    df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df.dropna(subset=['time', 'error'], inplace=True)
 
     if df.empty:
-        print(f"  No valid numeric data after conversion for {label}.")
-        return
+        print(f"  No valid numeric data after conversion or special processing for {label}.")
+        return None
     
-    # 对 error_single_column 类型的数据进行裁剪（如果点数过多）
     if log_type == "error_single_column" and len(df) > MAX_POINTS_FOR_ERROR_LOG:
         print(f"  Info: {label} (error_single_column type) has {len(df)} points. Truncating to first {MAX_POINTS_FOR_ERROR_LOG} points.")
-        df = df.head(MAX_POINTS_FOR_ERROR_LOG).copy()
+        df = df.head(MAX_POINTS_FOR_ERROR_LOG).copy() 
     
-    # 应用时间范围过滤器 (基于原始时间或索引)
     if time_range_filter:
         start_t, end_t = time_range_filter
-        condition = True
+        condition = True 
+        time_series = df['time'] if isinstance(df['time'], pd.Series) else pd.Series([df['time']])
         if start_t is not None:
-            condition &= (df['time'] >= start_t) 
+            condition &= (time_series >= start_t) 
         if end_t is not None:
-            condition &= (df['time'] <= end_t)
-        df = df[condition].copy()
+            condition &= (time_series <= end_t)
+        if not (isinstance(condition, bool) and condition is True):
+            df = df[condition].copy() 
         if df.empty:
             print(f"  No data after time range filtering for {label}.")
-            return
+            return None
 
     if df.empty: 
         print(f"  No data to process for {label} after all steps.")
-        return
+        return None
 
+    if df.empty or len(df['time']) == 0:
+        print(f"  No time data to adjust for {label}.")
+        return None
+        
     df.loc[:, 'time_adjusted'] = df['time'] - df['time'].iloc[0]
 
-    plt.plot(df['time_adjusted'], df['error'], label=label, color=color, marker='.', linestyle='-', markersize=3)
-
-    mean_error = df['error'].mean()
-    std_error = df['error'].std()
-    mean_abs_error = df['error'].abs().mean() # 计算平均绝对误差
+    mean_offset = df['error'].mean() 
+    std_dev_offset = df['error'].std() 
+    mean_abs_offset = df['error'].abs().mean() 
     
     print(f"  --- Statistics for {label} ---")
-    print(f"    Mean Error: {mean_error:.3f}")
-    print(f"    Mean Absolute Error: {mean_abs_error:.3f}") # 输出平均绝对误差
-    print(f"    Std Dev of Error: {std_error:.3f}")
-    print(f"    Data points plotted: {len(df)}")
+    print(f"    Mean Offset: {mean_offset:.3f} µs") 
+    print(f"    Mean Absolute Offset: {mean_abs_offset:.3f} µs") 
+    print(f"    Std Dev of Offset: {std_dev_offset:.3f} µs") 
+    print(f"    Data points used for stats: {len(df)}")
+
+    return {
+        'label': label,
+        'filepath': filepath,
+        'log_type': log_type,
+        'df': df,
+        'mean_offset': mean_offset, 
+        'mean_abs_offset': mean_abs_offset, 
+        'std_dev_offset': std_dev_offset 
+    }
 
 
-def main():
+def main(top_n_to_plot=5, rows_to_skip_default=0): # 新增参数 rows_to_skip_default
     """
-    主函数：查找日志文件，处理它们，并生成图表。
+    主函数：查找日志文件，处理它们，排序并生成图表和统计表。
+    :param top_n_to_plot: 要绘制误差变化图的最佳参数组合数量。
+    :param rows_to_skip_default: 对于 error_single_column 类型日志，默认跳过的起始行数。
     """
-    plt.figure(figsize=(18, 10))
-
     log_files = glob.glob("timeError_*.log")
-    log_files.sort()
 
     if not log_files:
         print("No 'timeError_*.log' files found in the current directory.")
         return
 
-    num_files = len(log_files)
-    colors = plt.cm.get_cmap('viridis', num_files if num_files > 0 else 1)
-
+    all_results = []
     print("Starting processing of timeError log files...")
-    for i, file_path in enumerate(log_files):
+    for file_path in log_files:
         filename = os.path.basename(file_path)
         
-        match = re.search(r"timeError_(a\d_b\d(?:_?[^_\d]*)?)_", filename, re.IGNORECASE)
+        match = re.search(r"timeError_((?:a\d_b\d)(?:_[^_20\.]+)?(?:_sync\d+)?)_", filename, re.IGNORECASE)
         if match:
             label = match.group(1)
-        else:
+        else: 
             label = filename.replace("timeError_", "").split('_20')[0] 
             if not label: label = filename 
 
         current_time_range = None 
+        
+        # 根据需要决定为特定标签或所有 single_column 日志跳过多少行
+        # 这里我们使用 main 函数传入的默认值
+        # 如果需要更细致的控制，可以在这里加入基于 label 的判断
+        rows_to_skip_for_current_file = rows_to_skip_default
+        # 示例：如果想只为 a0_b2 跳过，可以这样做 (但您要求通用)
+        # if "a0_b2" in label.lower():
+        #     rows_to_skip_for_current_file = 10 # 或者其他特定值
+        # else:
+        #     rows_to_skip_for_current_file = 0
 
-        process_and_plot_log_file(file_path, label, colors(i / num_files if num_files > 1 else 0.5), 
-                                  time_range_filter=current_time_range)
+        stats_data = calculate_stats_from_log(file_path, label, 
+                                              time_range_filter=current_time_range,
+                                              skip_rows_for_single_col=rows_to_skip_for_current_file) # 传递参数
+        
+        if stats_data and stats_data['df'] is not None and not stats_data['df'].empty and pd.notna(stats_data['mean_abs_offset']):
+            all_results.append(stats_data)
+        else:
+            print(f"  Skipping {label} (File: {filename}) due to processing issues or no valid MAO (Mean Absolute Offset).")
 
-    plt.xlabel('Time (Adjusted, relative to start of each dataset)')
-    plt.ylabel('Time Error')
-    plt.title('Time Error Comparison for Different Parameters (Content-based Type Detection)')
+    if not all_results:
+        print("No data could be processed successfully from the log files.")
+        return
+
+    all_results.sort(key=lambda x: x['mean_abs_offset']) 
+
+    print("\n--- Sorted Results by Mean Absolute Offset (Lower is Better) ---")
+    for res in all_results:
+        print(f"  Label: {res['label']}, MAO: {res['mean_abs_offset']:.3f} µs, File: {os.path.basename(res['filepath'])}")
+
+    if all_results:
+        stats_summary_data = []
+        for res in all_results: 
+            stats_summary_data.append({
+                'Label': res['label'],
+                'File': os.path.basename(res['filepath']),
+                'Mean Offset (µs)': f"{res['mean_offset']:.3f}" if pd.notna(res['mean_offset']) else "N/A",
+                'Mean Absolute Offset (µs)': f"{res['mean_abs_offset']:.3f}" if pd.notna(res['mean_abs_offset']) else "N/A",
+                'Std Dev of Offset (µs)': f"{res['std_dev_offset']:.3f}" if pd.notna(res['std_dev_offset']) else "N/A",
+                'Data Points': len(res['df']) if res['df'] is not None else 0
+            })
+        
+        summary_df = pd.DataFrame(stats_summary_data)
+        print("\n\n--- Overall Statistics Summary ---")
+        print(summary_df.to_string(index=False)) 
+        
+        summary_csv_path = "statistics_summary.csv"
+        try:
+            summary_df.to_csv(summary_csv_path, index=False)
+            print(f"\nStatistics summary saved to {summary_csv_path}")
+        except Exception as e:
+            print(f"\nError saving statistics summary to CSV: {e}")
+
+    results_to_plot = all_results[:top_n_to_plot]
     
-    if num_files > 10:
-        plt.legend(loc='best', ncol=2, fontsize='small')
-    elif num_files > 0 : 
-        plt.legend(loc='best')
+    if not results_to_plot:
+        print(f"\nNo results to plot (top_n_to_plot might be 0 or no valid results after sorting).")
+        return
+
+    plt.figure(figsize=(18, 10))
+    num_to_plot_actually = len(results_to_plot)
+
+    if num_to_plot_actually <= 8:
+        colors = plt.cm.get_cmap('Dark2', num_to_plot_actually if num_to_plot_actually > 0 else 1)
+    elif num_to_plot_actually <= 9:
+        colors = plt.cm.get_cmap('Set1', num_to_plot_actually if num_to_plot_actually > 0 else 1)
+    else: 
+        colors = plt.cm.get_cmap('tab10', num_to_plot_actually if num_to_plot_actually > 0 else 1)
+
+    print(f"\nPlotting top {num_to_plot_actually} results based on MAO...")
+    
+    # Y轴调整代码已被移除
+
+    for i, result in enumerate(results_to_plot):
+        df_to_plot = result['df']
+        plot_label = f"{result['label']} (MAO: {result['mean_abs_offset']:.3f} µs)"
+        
+        color_val = colors(i % colors.N) if num_to_plot_actually > 0 else colors(0.5)
+
+        plt.plot(df_to_plot['time_adjusted'], 
+                 df_to_plot['error'], 
+                 label=plot_label, 
+                 color=color_val, 
+                 marker='.', 
+                 linestyle='-', 
+                 markersize=2,   
+                 linewidth=0.7,  
+                 alpha=0.8)      
+
+    plt.xlabel('Sample Index') 
+    plt.ylabel('Time Offset (µs)') 
+    title_str = f'Top {num_to_plot_actually} Time Offset Comparison (Sorted by MAO)'
+    plt.title(title_str) 
+    
+    if num_to_plot_actually > 0:
+        if num_to_plot_actually > 10 : 
+             plt.legend(loc='best', ncol=2, fontsize='small')
+        else:
+             plt.legend(loc='best')
         
     plt.grid(True, which='both', linestyle='--', linewidth=0.5)
     plt.tight_layout()
     
-    output_svg_path = "time_error_comparison_content_detection_v2.svg" # 更新输出文件名
-    output_png_path = "time_error_comparison_content_detection_v2.png" # 更新输出文件名
+    output_svg_path = "time_offset_comparison_top_n_mao.svg" 
+    output_png_path = "time_offset_comparison_top_n_mao.png" 
     plt.savefig(output_svg_path)
     plt.savefig(output_png_path)
-    print(f"\nPlots saved as {output_svg_path} and {output_png_path}")
+    print(f"\nPlots for top {num_to_plot_actually} results saved as {output_svg_path} and {output_png_path}")
     
     plt.show()
 
 if __name__ == "__main__":
-    main()
+    # 现在可以传递一个默认的跳过行数给 main 函数
+    # 如果大多数 single_column 文件需要跳过10行，可以这样设置：
+    main(top_n_to_plot=10, rows_to_skip_default=10)
+    # 如果不需要跳过任何行，设置为 0：
+    # main(top_n_to_plot=10, rows_to_skip_default=0)
