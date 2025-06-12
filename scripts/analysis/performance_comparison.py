@@ -212,14 +212,17 @@ def calculate_stats_from_log(filepath, label, time_range_filter=None, skip_rows_
         
     df.loc[:, 'time_adjusted'] = df['time'] - df['time'].iloc[0]
 
-    mean_offset = df['error'].mean() 
-    std_dev_offset = df['error'].std() 
-    mean_abs_offset = df['error'].abs().mean() 
-    
+    mean_offset = df['error'].mean()
+    # mean_abs_offset = df['error'].abs().mean() # 原来的 Mean Absolute Offset 计算
+    max_abs_offset = df['error'].abs().max()    # 新增：最大绝对值
+    rms_offset = np.sqrt(np.mean(df['error']**2)) # 新增：RMS
+    std_dev_offset = df['error'].std()          # 保留：标准差
+
     print(f"  --- Statistics for {label} ---")
-    print(f"    Mean Offset: {mean_offset:.3f} µs") 
-    print(f"    Mean Absolute Offset: {mean_abs_offset:.3f} µs") 
-    print(f"    Std Dev of Offset: {std_dev_offset:.3f} µs") 
+    print(f"    Mean Offset: {mean_offset:.3f} µs")
+    print(f"    Max Absolute Offset: {max_abs_offset:.3f} µs") # 更改：替换原来的 Mean Absolute Offset
+    print(f"    RMS of Offset: {rms_offset:.3f} µs")         # 新增
+    print(f"    Std Dev of Offset: {std_dev_offset:.3f} µs")
     print(f"    Data points used for stats: {len(df)}")
 
     return {
@@ -227,9 +230,11 @@ def calculate_stats_from_log(filepath, label, time_range_filter=None, skip_rows_
         'filepath': filepath,
         'log_type': log_type,
         'df': df,
-        'mean_offset': mean_offset, 
-        'mean_abs_offset': mean_abs_offset, 
-        'std_dev_offset': std_dev_offset 
+        'mean_offset': mean_offset,
+        # 'mean_abs_offset': mean_abs_offset, # mean_abs_offset 不再返回
+        'max_abs_offset': max_abs_offset,     # 新增返回
+        'rms_offset': rms_offset,             # 新增返回
+        'std_dev_offset': std_dev_offset
     }
 
 
@@ -239,10 +244,10 @@ def main(top_n_to_plot=5, rows_to_skip_default=0): # 新增参数 rows_to_skip_d
     :param top_n_to_plot: 要绘制误差变化图的最佳参数组合数量。
     :param rows_to_skip_default: 对于 error_single_column 类型日志，默认跳过的起始行数。
     """
-    log_files = glob.glob("timeError_*.log")
+    log_files = glob.glob("../../data/phase_deviation_0524/timeError_*.log")
 
     if not log_files:
-        print("No 'timeError_*.log' files found in the current directory.")
+        print("No 'timeError_*.log' files found in the target data directory.") # 更正了提示信息
         return
 
     all_results = []
@@ -269,47 +274,54 @@ def main(top_n_to_plot=5, rows_to_skip_default=0): # 新增参数 rows_to_skip_d
         # else:
         #     rows_to_skip_for_current_file = 0
 
-        stats_data = calculate_stats_from_log(file_path, label, 
+        stats_data = calculate_stats_from_log(file_path, label,
                                               time_range_filter=current_time_range,
                                               skip_rows_for_single_col=rows_to_skip_for_current_file) # 传递参数
-        
-        if stats_data and stats_data['df'] is not None and not stats_data['df'].empty and pd.notna(stats_data['mean_abs_offset']):
+
+        # 使用新的指标 (例如 rms_offset) 进行有效性检查
+        if stats_data and stats_data['df'] is not None and not stats_data['df'].empty and pd.notna(stats_data['rms_offset']):
             all_results.append(stats_data)
         else:
-            print(f"  Skipping {label} (File: {filename}) due to processing issues or no valid MAO (Mean Absolute Offset).")
+            # 更新跳过信息的措辞，如果不再基于 MAO
+            print(f"  Skipping {label} (File: {filename}) due to processing issues or no valid RMS Offset.")
 
     if not all_results:
         print("No data could be processed successfully from the log files.")
         return
 
-    all_results.sort(key=lambda x: x['mean_abs_offset']) 
+    # 按新的指标 (例如 rms_offset) 排序
+    all_results.sort(key=lambda x: x['rms_offset'])
 
-    print("\n--- Sorted Results by Mean Absolute Offset (Lower is Better) ---")
+    # 更新排序结果的打印标题和内容
+    print("\n--- Sorted Results by RMS Offset (Lower is Better) ---")
     for res in all_results:
-        print(f"  Label: {res['label']}, MAO: {res['mean_abs_offset']:.3f} µs, File: {os.path.basename(res['filepath'])}")
+        print(f"  Label: {res['label']}, RMS: {res['rms_offset']:.3f} µs, MaxAbs: {res['max_abs_offset']:.3f} µs, File: {os.path.basename(res['filepath'])}")
 
     if all_results:
         stats_summary_data = []
-        for res in all_results: 
+        for res in all_results:
             stats_summary_data.append({
                 'Label': res['label'],
                 'File': os.path.basename(res['filepath']),
                 'Mean Offset (µs)': f"{res['mean_offset']:.3f}" if pd.notna(res['mean_offset']) else "N/A",
-                'Mean Absolute Offset (µs)': f"{res['mean_abs_offset']:.3f}" if pd.notna(res['mean_abs_offset']) else "N/A",
+                'Max Absolute Offset (µs)': f"{res['max_abs_offset']:.3f}" if pd.notna(res['max_abs_offset']) else "N/A", # 新增
+                'RMS of Offset (µs)': f"{res['rms_offset']:.3f}" if pd.notna(res['rms_offset']) else "N/A",           # 新增
                 'Std Dev of Offset (µs)': f"{res['std_dev_offset']:.3f}" if pd.notna(res['std_dev_offset']) else "N/A",
                 'Data Points': len(res['df']) if res['df'] is not None else 0
             })
         
         summary_df = pd.DataFrame(stats_summary_data)
-        print("\n\n--- Overall Statistics Summary ---")
+        print("\\n\\n--- Overall Statistics Summary ---")
         print(summary_df.to_string(index=False)) 
         
-        summary_csv_path = "statistics_summary.csv"
+        summary_csv_path = "../../results/phase_deviation_0524/statistics_summary.csv"
         try:
+            # 确保目录存在
+            os.makedirs(os.path.dirname(summary_csv_path), exist_ok=True)
             summary_df.to_csv(summary_csv_path, index=False)
-            print(f"\nStatistics summary saved to {summary_csv_path}")
+            print(f"\\nStatistics summary saved to {summary_csv_path}")
         except Exception as e:
-            print(f"\nError saving statistics summary to CSV: {e}")
+            print(f"\\nError saving statistics summary to CSV: {e}")
 
     results_to_plot = all_results[:top_n_to_plot]
     
@@ -327,13 +339,14 @@ def main(top_n_to_plot=5, rows_to_skip_default=0): # 新增参数 rows_to_skip_d
     else: 
         colors = plt.cm.get_cmap('tab10', num_to_plot_actually if num_to_plot_actually > 0 else 1)
 
-    print(f"\nPlotting top {num_to_plot_actually} results based on MAO...")
+    print(f"\nPlotting top {num_to_plot_actually} results based on RMS Offset...") # 更新绘图说明
     
     # Y轴调整代码已被移除
 
     for i, result in enumerate(results_to_plot):
         df_to_plot = result['df']
-        plot_label = f"{result['label']} (MAO: {result['mean_abs_offset']:.3f} µs)"
+        # 更新绘图标签以反映排序依据
+        plot_label = f"{result['label']} (RMS: {result['rms_offset']:.3f} µs)"
         
         color_val = colors(i % colors.N) if num_to_plot_actually > 0 else colors(0.5)
 
@@ -349,7 +362,7 @@ def main(top_n_to_plot=5, rows_to_skip_default=0): # 新增参数 rows_to_skip_d
 
     plt.xlabel('Sample Index') 
     plt.ylabel('Time Offset (µs)') 
-    title_str = f'Top {num_to_plot_actually} Time Offset Comparison (Sorted by MAO)'
+    title_str = f'Top {num_to_plot_actually} Time Offset Comparison (Sorted by RMS Offset)' # 更新图表标题
     plt.title(title_str) 
     
     if num_to_plot_actually > 0:
@@ -361,11 +374,15 @@ def main(top_n_to_plot=5, rows_to_skip_default=0): # 新增参数 rows_to_skip_d
     plt.grid(True, which='both', linestyle='--', linewidth=0.5)
     plt.tight_layout()
     
-    output_svg_path = "time_offset_comparison_top_n_mao.svg" 
-    output_png_path = "time_offset_comparison_top_n_mao.png" 
+    output_svg_path = "../../results/phase_deviation_0524/time_offset_comparison_top_n_rms.svg" # 建议修改输出文件名以反映排序标准
+    output_png_path = "../../results/phase_deviation_0524/time_offset_comparison_top_n_rms.png" # 建议修改输出文件名以反映排序标准
+    
+    # 确保目录存在
+    os.makedirs(os.path.dirname(output_svg_path), exist_ok=True)
+    
     plt.savefig(output_svg_path)
     plt.savefig(output_png_path)
-    print(f"\nPlots for top {num_to_plot_actually} results saved as {output_svg_path} and {output_png_path}")
+    print(f"\\nPlots for top {num_to_plot_actually} results saved as {output_svg_path} and {output_png_path}")
     
     plt.show()
 
