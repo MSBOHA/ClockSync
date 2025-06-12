@@ -1,0 +1,89 @@
+#!/bin/bash
+
+# 配置参数
+SERVER_IP="192.168.100.100"
+TEST_DURATION=1200  # 20分钟=1200秒
+BANDWIDTHS=(100M 200M 300M 400M 500M 600M)
+LOG_DIR="/root/collected_sync_logs"
+PTPATR_CMD="ptpatr -c $SERVER_IP -x"
+ORIGINAL_LOG="/root/tool/log0-original.log"
+
+# 确保日志目录存在
+mkdir -p "$LOG_DIR"
+
+# 函数: 获取当前时间戳
+timestamp() {
+  date +"%Y%m%d_%H%M%S"
+}
+
+# 函数: 记录CPU温度
+monitor_temp() {
+  local log_file="$1"
+  local start_time=$(date +%s)
+  
+  echo "时间(秒) CPU温度(°C)" > "$log_file"
+  
+  while true; do
+    current_time=$(date +%s)
+    elapsed_time=$((current_time - start_time))
+    temp=$(cat /sys/class/thermal/thermal_zone0/temp)
+    temp_c=$(echo "scale=2; $temp / 1000.0" | bc)
+    echo "$elapsed_time $temp_c" >> "$log_file"
+    sleep 1
+  done
+}
+
+# 主测试循环
+for bw in "${BANDWIDTHS[@]}"; do
+  echo "开始测试带宽: $bw"
+  TEST_START_TIME=$(timestamp)
+  TEMP_LOG="${LOG_DIR}/${bw}temp.log"
+  
+  # 删除可能存在的旧日志文件
+  [ -f "$ORIGINAL_LOG" ] && rm "$ORIGINAL_LOG"
+  [ -f "$TEMP_LOG" ] && rm "$TEMP_LOG"
+  
+  # 启动温度监控 (后台运行)
+  monitor_temp "$TEMP_LOG" &
+  TEMP_PID=$!
+  
+  # 启动ptpatr测试 (后台运行)
+  echo "启动PTP时钟同步测试..."
+  $PTPATR_CMD > /dev/null 2>&1 &
+  PTP_PID=$!
+  
+  # 启动iperf测试 (双向带宽)
+  echo "启动iperf带宽测试: $bw 双向..."
+  iperf3 -c $SERVER_IP -b $bw --bidir -t $TEST_DURATION > "${LOG_DIR}/iperf_${bw}_${TEST_START_TIME}.log" 2>&1 &
+  IPERF_PID=$!
+  
+  # 显示测试进度
+  echo "测试进行中 (带宽: $bw, 持续时间: 20分钟)..."
+  sleep $TEST_DURATION
+  
+  # 等待ptpatr生成日志文件
+  sleep 5
+  
+  # 移动并重命名ptpatr日志文件
+  if [ -f "$ORIGINAL_LOG" ]; then
+    mv "$ORIGINAL_LOG" "${LOG_DIR}/log0-original_${bw}_${TEST_START_TIME}.log"
+    echo "PTP日志已保存为: ${LOG_DIR}/log0-original_${bw}_${TEST_START_TIME}.log"
+  else
+    echo "警告: 未找到PTP日志文件 $ORIGINAL_LOG"
+  fi
+  
+  # 清理进程
+  echo "测试完成，清理进程..."
+  kill $PTP_PID $IPERF_PID $TEMP_PID 2>/dev/null
+  wait $PTP_PID $IPERF_PID $TEMP_PID 2>/dev/null
+  
+  echo "带宽 $bw 测试完成"
+  echo "----------------------------------------"
+done
+
+echo "所有测试完成!"
+echo "日志文件保存在: $LOG_DIR"
+echo "包括:"
+echo "- PTP日志: log0-original_{bw}_{timestamp}.log"
+echo "- iperf日志: iperf_{bw}_{timestamp}.log"
+echo "- 温度日志: {bw}temp.log"
