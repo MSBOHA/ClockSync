@@ -50,20 +50,28 @@ def segment_slope_fit(x, y, segment_length=150, step=1000):
         centers.append(np.mean(x_segment))
     return np.array(centers), np.array(slopes)
 
-def main():
-    df, temp101, temp100 = read_data()
+def analyze_freq_and_temp(log_file, temp_file=None, output_dir='results', temp100_file=None):
+    df = pd.read_csv(log_file, sep='\s+', header=None)
+    if len(df.columns) >= len(column_names):
+        df.columns = column_names + [f"col_{i}" for i in range(len(df.columns)-len(column_names))]
+    else:
+        df.columns = column_names[:len(df.columns)]
+    temp101 = None
+    if temp_file is not None and os.path.exists(temp_file):
+        temp101 = pd.read_csv(temp_file, sep='\s+', header=None, names=['index', 'temperature', 'unit'], encoding='gbk')
+        temp101['temperature'] = temp101['temperature'].astype(float)
+    temp100 = None
+    if temp100_file is not None and os.path.exists(temp100_file):
+        temp100 = pd.read_csv(temp100_file, sep='\s+', header=None, names=['index', 'temperature', 'unit'], encoding='gbk')
+        temp100['temperature'] = temp100['temperature'].astype(float)
     t1 = df["ns2s(getT1(RAW))"].values
     t2 = df["ns2s(getT2(RAW))"].values
-    # 使用滑动窗口，step=10，segment_length可调
     segment_length = 400
     step = 100
     centers, slopes = segment_slope_fit(t1, t2, segment_length=segment_length, step=step)
     window_indices = np.arange(len(centers))
-
-    # 输出图片到 results/temp_drift_0613/
-    output_dir = os.path.join('results', 'temp_drift_0613')
     os.makedirs(output_dir, exist_ok=True)
-
+    # 频率分段图
     plt.figure(figsize=(12, 6))
     plt.plot(window_indices, slopes, marker='o', linestyle='-', label='分段频率比 (T1 vs T2)')
     plt.xlabel('滑动窗口序号', fontproperties='SimHei')
@@ -74,32 +82,44 @@ def main():
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'freq_segment_vs_temp.png'))
     plt.show()
-
-    # 温度曲线（100和101设备）
-    plt.figure(figsize=(12, 6))
-    plt.plot(temp101['index'], temp101['temperature'], 'o-', label='101号CPU温度', markersize=3)
-    plt.plot(temp100['index'], temp100['temperature'], 'o-', label='100号CPU温度', markersize=3)
-    plt.title('100/101号设备 CPU温度变化', fontproperties='SimHei')
-    plt.xlabel('序号', fontproperties='SimHei')
-    plt.ylabel('温度 (°C)', fontproperties='SimHei')
-    plt.grid()
-    plt.legend(prop={'family': 'SimHei'})
-    plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'cpu_temp_curve.png'))
-    plt.show()
-
-    # 可选：频率比与温度对比（101号）
-    if len(window_indices) == len(temp101['temperature']):
+    plt.close()
+    # 温度曲线
+    if temp101 is not None:
         plt.figure(figsize=(12, 6))
-        plt.plot(window_indices, slopes, label='频率比 (T1 vs T2)')
-        plt.plot(window_indices, temp101['temperature'][:len(window_indices)], label='101号温度 (°C)')
-        plt.xlabel('滑动窗口序号', fontproperties='SimHei')
-        plt.title('频率比与温度对比 (101号设备)', fontproperties='SimHei')
-        plt.legend(prop={'family': 'SimHei'})
+        plt.plot(temp101['index'], temp101['temperature'], 'o-', label='101号CPU温度', markersize=3)
+        if temp100 is not None:
+            plt.plot(temp100['index'], temp100['temperature'], 'o-', label='100号CPU温度', markersize=3)
+            plt.title('100/101号设备 CPU温度变化', fontproperties='SimHei')
+        else:
+            plt.title('101号设备 CPU温度变化', fontproperties='SimHei')
+        plt.xlabel('序号', fontproperties='SimHei')
+        plt.ylabel('温度 (°C)', fontproperties='SimHei')
         plt.grid()
+        plt.legend(prop={'family': 'SimHei'})
         plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'freq_vs_temp_compare.png'))
+        plt.savefig(os.path.join(output_dir, 'cpu_temp_curve.png'))
         plt.show()
+        plt.close()
+        # 频率与温度对比
+        if len(window_indices) == len(temp101['temperature']):
+            plt.figure(figsize=(12, 6))
+            plt.plot(window_indices, slopes, label='频率比 (T1 vs T2)')
+            plt.plot(window_indices, temp101['temperature'][:len(window_indices)], label='101号温度 (°C)')
+            plt.xlabel('滑动窗口序号', fontproperties='SimHei')
+            plt.title('频率比与温度对比 (101号设备)', fontproperties='SimHei')
+            plt.legend(prop={'family': 'SimHei'})
+            plt.grid()
+            plt.tight_layout()
+            plt.savefig(os.path.join(output_dir, 'freq_vs_temp_compare.png'))
+            plt.show()
+            plt.close()
+    return df, temp101, temp100
+
+# 保留原main兼容命令行
+
+def main():
+    temp100_file = os.path.join(DATA_DIR, 'cpu_temp100.log')
+    analyze_freq_and_temp(LOG_FILE, TEMP_FILE, output_dir=os.path.join('results', 'temp_drift_0613'), temp100_file=temp100_file)
 
 if __name__ == '__main__':
     main()

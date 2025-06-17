@@ -11,4 +11,4 @@
 - cpu_temp101.log：三列，分别为采集索引、温度值（°C）、单位。
 
 ## 用途
-建议配合 notebooks/clock_temp_allan_analysis_101.ipynb 进行时钟频率漂移、温度变化与 Allan 方差分析。
+建议配合 scripts/analysis/clock_allan_variance.py clock_freq_vs_temp.py  进行时钟频率漂移、温度变化与 Allan 方差分析。
