@@ -389,13 +389,14 @@ def main(top_n_to_plot=9, rows_to_skip_default=0):
         plt.plot(df_chrony['time_adjusted'], df_chrony['error'], label=label_chrony, color='green',
                  marker='.', linestyle='-', markersize=2, linewidth=0.7, alpha=0.8)
         
-        plt.xlabel('Sample Index')
-        plt.ylabel('Time Offset (µs)')
-        plt.title('Chrony Time Offset (Sorted by RMS Offset)', fontsize=16)
+        plt.xlabel('Sample Index',fontsize=20)
+        plt.ylabel('Time Offset (µs)',fontsize=20)
+        plt.title('Chrony Time Offset (Sorted by RMS Offset)', fontsize=20)
         plt.legend(loc='best', fontsize=12)
         plt.grid(True, which='both', linestyle='--', linewidth=0.5)
         plt.tight_layout()
-
+        plt.xticks(fontsize=20)
+        plt.yticks(fontsize=20)
         chrony_plot_svg_path = os.path.join(output_results_dir, "chrony_time_offset_rms.svg")
         chrony_plot_png_path = os.path.join(output_results_dir, "chrony_time_offset_rms.png")
         os.makedirs(os.path.dirname(chrony_plot_svg_path), exist_ok=True)
