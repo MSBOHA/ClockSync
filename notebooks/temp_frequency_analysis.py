@@ -4,38 +4,56 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
-from scipy import stats
 from scipy.optimize import curve_fit
-import warnings
-warnings.filterwarnings('ignore')
+import os
 
-plt.rcParams['figure.figsize'] = [12, 8]
 plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
 plt.rcParams['axes.unicode_minus'] = False
 
-def load_sync_data(filepath, window_seconds=2):
-    """加载同步数据并计算频率漂移"""
+# 数据加载
+
+def load_sync_data(filepath, window_seconds=100):
+    """加载同步数据并用滑窗斜率法计算频率漂移（使用RealTime 11-14列）"""
     with open(filepath, 'r') as f:
         lines = [line.strip() for line in f if line.strip() and not line.strip().startswith('//')]
     data = []
     for line in lines:
         parts = line.split()
-        if len(parts) >= 4:
+        if len(parts) >= 14:
             try:
-                t1, t2, t3, t4 = map(float, parts[:4])
+                t1, t2, t3, t4 = map(float, parts[10:14])  # 使用11-14列RealTime
                 data.append([t1, t2, t3, t4])
             except ValueError:
                 continue
+    
     df = pd.DataFrame(data, columns=['t1', 't2', 't3', 't4'])
     df['timestamp'] = df['t1']
-    df['t2_t1'] = df['t2'] - df['t1']
-    df['freq_ratio'] = df['t2_t1'] / df['t2_t1'].shift(1)
-    df = df.dropna()
     df = df.sort_values('timestamp').reset_index(drop=True)
+    
+    # 滑窗斜率法计算频率比
     time_span = df['timestamp'].max() - df['timestamp'].min()
     points_per_second = len(df) / time_span
     window_size = int(window_seconds * points_per_second)
-    df['freq_drift'] = df['freq_ratio'].rolling(window=window_size, center=True, min_periods=1).mean()
+    if window_size < 3:
+        window_size = 3
+    
+    freq_ratio = np.full(len(df), np.nan)
+    for i in range(len(df)):
+        left = max(0, i - window_size//2)
+        right = min(len(df), i + window_size//2 + 1)
+        idx = np.arange(left, right)
+        if len(idx) < 3:
+            continue
+        t1s = df['t1'].values[idx]
+        t2s = df['t2'].values[idx]
+        timestamps = df['timestamp'].values[idx]
+        # 计算t1和t2相对于真实时间的斜率（即频率）
+        k1 = np.polyfit(timestamps, t1s, 1)[0]  # dt1/dt_real
+        k2 = np.polyfit(timestamps, t2s, 1)[0]  # dt2/dt_real
+        if k1 != 0:
+            freq_ratio[i] = k2 / k1  # 频率比
+    
+    df['freq_drift'] = freq_ratio
     return df[['timestamp', 't1', 't2', 't3', 't4', 'freq_drift']].dropna()
 
 def load_temperature_data(filepath):
@@ -59,223 +77,260 @@ def interpolate_temperature(sync_ts, temp_data):
     """为同步时间戳插值温度数据"""
     return np.interp(sync_ts, temp_data['timestamp'], temp_data['temperature'])
 
-def joint_frequency_ratio_model(temp_data, f01, b1, T01, f02, b2, T02):
+# 联合模型定义
+
+def joint_linear_ratio_model(temp_data, f01, a1, T01, f02, a2, T02):
+    """联合线性模型：f1/f2 = [f01*(1+a1*(T1-T01))] / [f02*(1+a2*(T2-T02))]"""
+    T1, T2 = temp_data
+    f1 = f01 * (1 + a1 * (T1 - T01))
+    f2 = f02 * (1 + a2 * (T2 - T02))
+    return f1 / f2
+
+def joint_quadratic_ratio_model(temp_data, f01, b1, T01, f02, b2, T02):
+    """联合二次模型：f1/f2 = [f01*(1-b1*(T1-T01)^2)] / [f02*(1-b2*(T2-T02)^2)]"""
     T1, T2 = temp_data
     f1 = f01 * (1 - b1 * (T1 - T01)**2)
     f2 = f02 * (1 - b2 * (T2 - T02)**2)
     return f1 / f2
 
-def fit_joint_frequency_ratio_model(temp_100, temp_101, freq_ratio):
-    f01_init = 1.0
-    f02_init = 1.0
-    T01_init = np.mean(temp_100)
-    T02_init = np.mean(temp_101)
-    b1_init = 1e-6
-    b2_init = 1e-6
-    temp_data = [temp_100, temp_101]
-    try:
-        popt, pcov = curve_fit(joint_frequency_ratio_model, temp_data, freq_ratio, 
-                              p0=[f01_init, b1_init, T01_init, f02_init, b2_init, T02_init],
-                              maxfev=10000)
-        return popt, pcov
-    except Exception as e:
-        print(f"拟合失败: {e}")
-        return [f01_init, b1_init, T01_init, f02_init, b2_init, T02_init], None
+def fit_joint_models(temp1, temp2, freq):
+    """拟合联合线性和二次模型（改进的优化算法）"""
+    from scipy.optimize import differential_evolution, minimize
+    
+    T01_mean = np.mean(temp1)
+    T02_mean = np.mean(temp2)
+    T1_range = temp1.max() - temp1.min()
+    T2_range = temp2.max() - temp2.min()
+    freq_mean = np.mean(freq)
+    
+    print(f"温度范围: T1={temp1.min():.1f}-{temp1.max():.1f}°C, T2={temp2.min():.1f}-{temp2.max():.1f}°C")
+    
+    # === 线性模型拟合 ===
+    def linear_objective(params):
+        try:
+            pred = joint_linear_ratio_model([temp1, temp2], *params)
+            return np.mean((freq - pred)**2)
+        except:
+            return 1e10
+    
+    # 线性模型参数边界：[f01, a1, T01, f02, a2, T02]
+    linear_bounds = [
+        (0.99, 1.01),           # f01: 接近1
+        (-1e-5, 1e-5),          # a1: 温度系数
+        (temp1.min()-5, temp1.max()+5),  # T01: 在合理范围内
+        (0.99, 1.01),           # f02: 接近1
+        (-1e-5, 1e-5),          # a2: 温度系数
+        (temp2.min()-5, temp2.max()+5)   # T02: 在合理范围内
+    ]
+    
+    # 多次尝试线性拟合
+    best_linear_result = None
+    best_linear_rmse = np.inf
+    
+    for seed in range(5):
+        try:
+            np.random.seed(seed)
+            result = differential_evolution(linear_objective, linear_bounds, seed=seed, maxiter=1000)
+            if result.success and result.fun < best_linear_rmse:
+                best_linear_result = result
+                best_linear_rmse = result.fun
+        except:
+            continue
+    
+    if best_linear_result is None:
+        # 回退到原方法
+        p0_lin = [1.0, 1e-6, T01_mean, 1.0, 1e-6, T02_mean]
+        popt_lin, _ = curve_fit(joint_linear_ratio_model, [temp1, temp2], freq, p0=p0_lin, maxfev=10000)
+    else:
+        popt_lin = best_linear_result.x
+    
+    pred_lin = joint_linear_ratio_model([temp1, temp2], *popt_lin)
+    rmse_lin = np.sqrt(np.mean((freq - pred_lin)**2))
+    
+    # === 二次模型拟合 ===
+    def quad_objective(params):
+        try:
+            pred = joint_quadratic_ratio_model([temp1, temp2], *params)
+            if np.any(~np.isfinite(pred)):
+                return 1e10
+            return np.mean((freq - pred)**2)
+        except:
+            return 1e10
+    
+    # 二次模型参数边界：[f01, b1, T01, f02, b2, T02]
+    quad_bounds = [
+        (0.95, 1.05),           # f01: 更宽松的基准频率范围
+        (-1e-6, 1e-6),          # b1: 二次系数
+        (temp1.min()-2, temp1.max()+2),  # T01: 参考温度在观测范围内
+        (0.95, 1.05),           # f02: 更宽松的基准频率范围
+        (-1e-6, 1e-6),          # b2: 二次系数
+        (temp2.min()-2, temp2.max()+2)   # T02: 参考温度在观测范围内
+    ]
+    
+    # 多次尝试二次拟合
+    best_quad_result = None
+    best_quad_rmse = np.inf
+    
+    for seed in range(10):  # 二次模型更难拟合，多试几次
+        try:
+            np.random.seed(seed)
+            result = differential_evolution(quad_objective, quad_bounds, seed=seed, maxiter=1500)
+            if result.success and result.fun < best_quad_rmse:
+                best_quad_result = result
+                best_quad_rmse = result.fun
+        except:
+            continue
+    
+    if best_quad_result is None:
+        # 回退到原方法
+        p0_quad = [1.0, 1e-7, T01_mean, 1.0, 1e-7, T02_mean]
+        try:
+            popt_quad, _ = curve_fit(joint_quadratic_ratio_model, [temp1, temp2], freq, 
+                                   p0=p0_quad, maxfev=20000,
+                                   bounds=([0.95, -1e-6, temp1.min()-2, 0.95, -1e-6, temp2.min()-2],
+                                          [1.05, 1e-6, temp1.max()+2, 1.05, 1e-6, temp2.max()+2]))
+        except:
+            popt_quad = p0_quad
+    else:
+        popt_quad = best_quad_result.x
+    
+    pred_quad = joint_quadratic_ratio_model([temp1, temp2], *popt_quad)
+    rmse_quad = np.sqrt(np.mean((freq - pred_quad)**2))
+    
+    return popt_lin, pred_lin, rmse_lin, popt_quad, pred_quad, rmse_quad
+
+def plot_surface_with_obs(temp1, temp2, freq, model, params, title, sample_n=1000):
+    """绘制3D曲面并叠加观测点"""
+    T1 = np.linspace(temp1.min(), temp1.max(), 40)
+    T2 = np.linspace(temp2.min(), temp2.max(), 40)
+    T1g, T2g = np.meshgrid(T1, T2)
+    
+    if model == 'linear':
+        Z = joint_linear_ratio_model([T1g, T2g], *params)
+    else:
+        Z = joint_quadratic_ratio_model([T1g, T2g], *params)
+    
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # 绘制曲面
+    surf = ax.plot_surface(T1g, T2g, Z, cmap='viridis', alpha=0.8)
+    
+    # 采样观测点
+    n = len(temp1)
+    if n > sample_n:
+        idx = np.random.choice(n, sample_n, replace=False)
+        ax.scatter(temp1[idx], temp2[idx], freq[idx], 
+                  c='red', s=15, alpha=0.8, label=f'观测点(采样{sample_n}个)')
+    else:
+        ax.scatter(temp1, temp2, freq, c='red', s=15, alpha=0.8, label='观测点')
+    
+    ax.set_xlabel('设备100温度 (°C)')
+    ax.set_ylabel('设备101温度 (°C)')
+    ax.set_zlabel('频率比值 (f1/f2)')
+    ax.set_title(title)
+    ax.legend()
+    plt.colorbar(surf, shrink=0.5, aspect=20)
+    plt.tight_layout()
+    plt.show()
+
+def plot_T101_vs_freq_fixed_T100(temp1, temp2, freq, popt_lin, popt_quad, T100_target=36.0, delta=1.0):
+    """绘制固定设备100温度时，设备101温度与频率比的关系"""
+    # 筛选T100在目标温度附近的数据点
+    mask = np.abs(temp1 - T100_target) <= delta
+    temp2_sel = temp2[mask]
+    freq_sel = freq[mask]
+    
+    if len(temp2_sel) < 10:
+        print(f"设备100温度{T100_target}°C附近的数据点太少: {len(temp2_sel)}个")
+        return
+    
+    # 创建预测曲线的温度范围
+    T101_range = np.linspace(temp2_sel.min(), temp2_sel.max(), 100)
+    T100_fixed = np.full_like(T101_range, T100_target)
+    
+    # 线性模型预测
+    pred_linear = joint_linear_ratio_model([T100_fixed, T101_range], *popt_lin)
+    # 二次模型预测
+    pred_quad = joint_quadratic_ratio_model([T100_fixed, T101_range], *popt_quad)
+    
+    # 绘图
+    plt.figure(figsize=(10, 6))
+    plt.scatter(temp2_sel, freq_sel, c='blue', s=20, alpha=0.7, label=f'观测点({len(temp2_sel)}个)')
+    plt.plot(T101_range, pred_linear, 'r-', linewidth=2, label='线性模型预测')
+    plt.plot(T101_range, pred_quad, 'g-', linewidth=2, label='二次模型预测')
+    
+    plt.xlabel('设备101温度 (°C)')
+    plt.ylabel('频率比值 (f1/f2)')
+    plt.title(f'固定设备100温度={T100_target:.1f}°C时，设备101温度-频率比关系\n(温度范围: {T100_target-delta:.1f}°C ~ {T100_target+delta:.1f}°C)')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+    
+    print(f"固定T100={T100_target:.1f}°C分析:")
+    print(f"  筛选数据点: {len(temp2_sel)}个")
+    print(f"  T101温度范围: {temp2_sel.min():.1f}°C ~ {temp2_sel.max():.1f}°C")
+    print(f"  频率比范围: {freq_sel.min():.6f} ~ {freq_sel.max():.6f}")
 
 def main():
-    # 加载数据（修正为相对notebooks目录的正确路径）
-    sync_data = load_sync_data('data/temp_drift_0613/log0-original101.log', window_seconds=200)
+    # 数据加载
+    print("正在加载数据...")
+    sync_data = load_sync_data('data/temp_drift_0613/log0-original101.log', window_seconds=100)
     temp_100 = load_temperature_data('data/temp_drift_0613/cpu_temp100.log')
     temp_101 = load_temperature_data('data/temp_drift_0613/cpu_temp101.log')
-    print(f"同步数据点数: {len(sync_data)}")
-    print(f"温度数据点数 - 设备100: {len(temp_100)}, 设备101: {len(temp_101)}")
-    print(f"频率漂移范围: [{sync_data['freq_drift'].min():.6f}, {sync_data['freq_drift'].max():.6f}]")
-
+    
     # 时间对齐
     sync_start_time = sync_data['timestamp'].min()
     temp_100['timestamp'] = temp_100['time_idx'] + sync_start_time
     temp_101['timestamp'] = temp_101['time_idx'] + sync_start_time
     sync_data['temp_100'] = interpolate_temperature(sync_data['timestamp'], temp_100)
     sync_data['temp_101'] = interpolate_temperature(sync_data['timestamp'], temp_101)
+    
+    # 数据清洗
     q1 = sync_data['freq_drift'].quantile(0.01)
     q99 = sync_data['freq_drift'].quantile(0.99)
     clean_data = sync_data[(sync_data['freq_drift'] >= q1) & (sync_data['freq_drift'] <= q99)].copy()
-    print(f"清洗后数据点数: {len(clean_data)}")
-    print(f"频率漂移范围: [{clean_data['freq_drift'].min():.6f}, {clean_data['freq_drift'].max():.6f}]")
+    
+    print(f"数据概况：")
+    print(f"  总数据点: {len(sync_data):,}")
+    print(f"  清洗后数据点: {len(clean_data):,}")
+    print(f"  频率比范围: [{clean_data['freq_drift'].min():.6f}, {clean_data['freq_drift'].max():.6f}]")
+    print(f"  设备100温度范围: {clean_data['temp_100'].min():.1f}°C - {clean_data['temp_100'].max():.1f}°C")
+    print(f"  设备101温度范围: {clean_data['temp_101'].min():.1f}°C - {clean_data['temp_101'].max():.1f}°C")
+    
+    # 联合模型拟合
+    print("\n正在拟合联合模型...")
+    popt_lin, pred_lin, rmse_lin, popt_quad, pred_quad, rmse_quad = fit_joint_models(
+        clean_data['temp_100'], clean_data['temp_101'], clean_data['freq_drift'])
+    
+    # 输出结果
+    print("\n=== 拟合结果 ===")
+    print(f"线性模型: f1/f2 = [f01*(1+a1*(T1-T01))] / [f02*(1+a2*(T2-T02))]")
+    print(f"  参数: f01={popt_lin[0]:.6f}, a1={popt_lin[1]:.2e}, T01={popt_lin[2]:.2f}")
+    print(f"        f02={popt_lin[3]:.6f}, a2={popt_lin[4]:.2e}, T02={popt_lin[5]:.2f}")
+    print(f"  RMSE: {rmse_lin:.6e}")
+    
+    print(f"\n二次模型: f1/f2 = [f01*(1-b1*(T1-T01)^2)] / [f02*(1-b2*(T2-T02)^2)]")
+    print(f"  参数: f01={popt_quad[0]:.6f}, b1={popt_quad[1]:.2e}, T01={popt_quad[2]:.2f}")
+    print(f"        f02={popt_quad[3]:.6f}, b2={popt_quad[4]:.2e}, T02={popt_quad[5]:.2f}")
+    print(f"  RMSE: {rmse_quad:.6e}")
+    
+    print(f"\n模型比较: {'二次模型更优' if rmse_quad < rmse_lin else '线性模型更优'} (RMSE差值: {abs(rmse_lin-rmse_quad):.6e})")
+      # 绘制3D曲面
+    print("\n正在绘制3D曲面...")
+    plot_surface_with_obs(clean_data['temp_100'].values, clean_data['temp_101'].values, 
+                         clean_data['freq_drift'].values, 'linear', popt_lin, 
+                         f'联合线性模型频率比曲面 (RMSE: {rmse_lin:.6e})')
+    
+    plot_surface_with_obs(clean_data['temp_100'].values, clean_data['temp_101'].values,
+                         clean_data['freq_drift'].values, 'quadratic', popt_quad,
+                         f'联合二次模型频率比曲面 (RMSE: {rmse_quad:.6e})')
+    
+    # 额外分析：固定T100=36°C时的T101-频率比关系
+    print("\n正在分析固定T100=36°C时的情况...")
+    plot_T101_vs_freq_fixed_T100(clean_data['temp_100'].values, clean_data['temp_101'].values,
+                                 clean_data['freq_drift'].values, popt_lin, popt_quad, T100_target=36.0)
 
-    # 拟合联合频率-温度模型
-    params, pcov = fit_joint_frequency_ratio_model(clean_data['temp_100'], clean_data['temp_101'], clean_data['freq_drift'])
-    f01, b1, T01, f02, b2, T02 = params
-    print(f"联合频率比模型参数:")
-    print(f"f₀₁ (设备100基准频率) = {f01:.6f}")
-    print(f"b₁ (设备100温度系数) = {b1:.2e}")
-    print(f"T₀₁ (设备100参考温度) = {T01:.1f}°C")
-    print(f"f₀₂ (设备101基准频率) = {f02:.6f}")
-    print(f"b₂ (设备101温度系数) = {b2:.2e}")  
-    print(f"T₀₂ (设备101参考温度) = {T02:.1f}°C")
-    y_pred = joint_frequency_ratio_model([clean_data['temp_100'], clean_data['temp_101']], f01, b1, T01, f02, b2, T02)
-
-    # 统计分析
-    print("=== 联合频率比模型拟合结果 ===")
-    print(f"频率比模型: f1/f2 = [{{f01:.6f}} × (1 - {{b1:.2e}}×(T₁-{{T01:.1f}})²)] / [{{f02:.6f}} × (1 - {{b2:.2e}}×(T₂-{{T02:.1f}})²)]")
-    print(f"其中:")
-    print(f"  f₀₁ (设备100基准频率) = {f01:.6f}")
-    print(f"  b₁ (设备100温度系数) = {b1:.2e} /°C²")
-    print(f"  T₀₁ (设备100参考温度) = {T01:.1f}°C")
-    print(f"  f₀₂ (设备101基准频率) = {f02:.6f}")
-    print(f"  b₂ (设备101温度系数) = {b2:.2e} /°C²")
-    print(f"  T₀₂ (设备101参考温度) = {T02:.1f}°C")
-    r2_joint = stats.pearsonr(clean_data['freq_drift'], y_pred)[0]**2
-    print(f"\n=== 联合模型拟合优度 ===")
-    print(f"联合模型 R²: {r2_joint:.4f}")
-    rmse_joint = np.sqrt(np.mean((clean_data['freq_drift'] - y_pred)**2))
-    print(f"联合模型 RMSE: {rmse_joint:.6f}")
-    f1_values = f01 * (1 - b1 * (clean_data['temp_100'] - T01)**2)
-    f2_values = f02 * (1 - b2 * (clean_data['temp_101'] - T02)**2)
-    temp1_deviation = clean_data['temp_100'] - T01
-    temp2_deviation = clean_data['temp_101'] - T02
-    f1_temp_effect = -b1 * temp1_deviation**2
-    f2_temp_effect = -b2 * temp2_deviation**2
-    print(f"\n=== 温度敏感性分析 ===")
-    print(f"设备100频率温度效应的平均值: {f1_temp_effect.mean():.6f}")
-    print(f"设备100频率温度效应的标准差: {f1_temp_effect.std():.6f}")
-    print(f"设备101频率温度效应的平均值: {f2_temp_effect.mean():.6f}")
-    print(f"设备101频率温度效应的标准差: {f2_temp_effect.std():.6f}")
-    ppm_per_degC2_100 = b1 * 1e6
-    ppm_per_degC2_101 = b2 * 1e6
-    print(f"\n=== 频率温度系数 (ppm/°C²) ===")
-    print(f"设备100: {ppm_per_degC2_100:.2f} ppm/°C²")
-    print(f"设备101: {ppm_per_degC2_101:.2f} ppm/°C²")
-    corr_100 = stats.pearsonr(clean_data['temp_100'], clean_data['freq_drift'])[0]
-    corr_101 = stats.pearsonr(clean_data['temp_101'], clean_data['freq_drift'])[0]
-    print(f"\n=== 单变量相关性分析 ===")
-    print(f"设备100温度与频率比值的相关系数: {corr_100:.4f}")
-    print(f"设备101温度与频率比值的相关系数: {corr_101:.4f}")
-    if pcov is not None:
-        param_errors = np.sqrt(np.diag(pcov))
-        param_names = ['f₀₁', 'b₁', 'T₀₁', 'f₀₂', 'b₂', 'T₀₂']
-        print(f"\n=== 参数不确定性分析 ===")
-        for i, (name, val, err) in enumerate(zip(param_names, params, param_errors)):
-            print(f"{name}: {val:.6f} ± {err:.6f} (相对误差: {err/abs(val)*100:.2f}%)")
-    else:
-        print(f"\n=== 参数不确定性分析 ===")
-        print("无法计算参数不确定性（协方差矩阵不可用）")
-    print(f"\n=== 物理意义解释 ===")
-    print(f"频率比值 f1/f2 表示设备100相对于设备101的时钟频率比值")
-    print(f"当温度等于参考温度时，频率比值 = f₀₁/f₀₂ = {f01/f02:.6f}")
-    print(f"温度偏离参考温度越远，频率偏离基准值越大（二次关系）")
-    if abs(b1) > abs(b2):
-        print(f"设备100的温度敏感性更高 (|b₁| > |b₂|)")
-    elif abs(b2) > abs(b1):
-        print(f"设备101的温度敏感性更高 (|b₂| > |b₁|)")
-    else:
-        print(f"两设备的温度敏感性相近")
-    print(f"\n=== 数据概览 ===")
-    print(f"使用的时间窗口: 1000秒")
-    print(f"数据点数: {len(clean_data)}")
-    print(f"频率比值标准差: {clean_data['freq_drift'].std():.6f}")
-    print(f"设备100温度范围: {clean_data['temp_100'].min():.1f}°C - {clean_data['temp_100'].max():.1f}°C")
-    print(f"设备101温度范围: {clean_data['temp_101'].min():.1f}°C - {clean_data['temp_101'].max():.1f}°C")
-
-    # 3D散点图
-    fig = plt.figure(figsize=(15, 10))
-    ax = fig.add_subplot(111, projection='3d')
-    n_points = min(10000, len(clean_data))
-    indices = np.random.choice(len(clean_data), n_points, replace=False)
-    sample_data = clean_data.iloc[indices]
-    scatter = ax.scatter(sample_data['temp_100'], 
-                         sample_data['temp_101'], 
-                         sample_data['freq_drift'],
-                         c=sample_data['freq_drift'], 
-                         cmap='viridis', 
-                         alpha=0.7, 
-                         s=20,
-                         edgecolors='none')
-    ax.set_xlabel('设备100温度 (°C)', fontsize=12, labelpad=10)
-    ax.set_ylabel('设备101温度 (°C)', fontsize=12, labelpad=10)
-    ax.set_zlabel('频率比值 f1/f2', fontsize=12, labelpad=10)
-    ax.set_title('实测数据：温度与频率比值的3D关系\n(样本点数: {:,})'.format(n_points), 
-                 fontsize=14, fontweight='bold', pad=20)
-    cbar = plt.colorbar(scatter, ax=ax, shrink=0.8, aspect=20, pad=0.1)
-    cbar.set_label('频率比值 f1/f2', fontsize=11)
-    ax.view_init(elev=20, azim=45)
-    ax.grid(True, alpha=0.3)
-    stats_text = f"""数据统计：\n• 总数据点: {len(clean_data):,}\n• 显示点数: {n_points:,}\n• T₁范围: {clean_data['temp_100'].min():.1f}°C - {clean_data['temp_100'].max():.1f}°C\n• T₂范围: {clean_data['temp_101'].min():.1f}°C - {clean_data['temp_101'].max():.1f}°C\n• 频率比范围: {clean_data['freq_drift'].min():.6f} - {clean_data['freq_drift'].max():.6f}"""
-    ax.text2D(0.02, 0.98, stats_text, transform=ax.transAxes, 
-              verticalalignment='top', fontsize=9,
-              bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-    plt.tight_layout()
-    plt.show()
-
-    # 6面板分析可视化
-    fig = plt.figure(figsize=(18, 12))
-    # 1. 3D散点图 - 原始数据
-    ax1 = fig.add_subplot(231, projection='3d')
-    scatter = ax1.scatter(clean_data['temp_100'], 
-                         clean_data['temp_101'], 
-                         clean_data['freq_drift'],
-                         c=clean_data['freq_drift'], 
-                         cmap='viridis', 
-                         alpha=0.6, s=10)
-    ax1.set_xlabel('设备100温度 (°C)')
-    ax1.set_ylabel('设备101温度 (°C)')
-    ax1.set_zlabel('频率比值 (f1/f2)')
-    ax1.set_title('实测数据: 温度与频率比值的3D关系')
-    # 2. 3D曲面图 - 模型预测
-    ax2 = fig.add_subplot(232, projection='3d')
-    T1_range = np.linspace(clean_data['temp_100'].min(), clean_data['temp_100'].max(), 50)
-    T2_range = np.linspace(clean_data['temp_101'].min(), clean_data['temp_101'].max(), 50)
-    T1_grid, T2_grid = np.meshgrid(T1_range, T2_range)
-    Z_grid = joint_frequency_ratio_model([T1_grid, T2_grid], f01, b1, T01, f02, b2, T02)
-    surf = ax2.plot_surface(T1_grid, T2_grid, Z_grid, cmap='viridis', alpha=0.7)
-    ax2.set_xlabel('设备100温度 (°C)')
-    ax2.set_ylabel('设备101温度 (°C)')
-    ax2.set_zlabel('频率比值 (f1/f2)')
-    ax2.set_title('模型预测: 联合频率比-温度模型')
-    # 3. 设备100温度 vs 频率比值（固定设备101温度为平均值）
-    ax3 = fig.add_subplot(233)
-    ax3.scatter(clean_data['temp_100'], clean_data['freq_drift'], alpha=0.3, s=5)
-    T1_fit = np.linspace(clean_data['temp_100'].min(), clean_data['temp_100'].max(), 100)
-    T2_fixed = np.full_like(T1_fit, clean_data['temp_101'].mean())
-    y_fit_T1 = joint_frequency_ratio_model([T1_fit, T2_fixed], f01, b1, T01, f02, b2, T02)
-    ax3.plot(T1_fit, y_fit_T1, 'r-', linewidth=2, 
-             label=f'设备101固定为{clean_data["temp_101"].mean():.1f}°C时的预测')
-    ax3.set_xlabel('设备100温度 (°C)')
-    ax3.set_ylabel('频率比值 (f1/f2)')
-    ax3.set_title('设备100温度影响 (设备101温度固定)')
-    ax3.legend()
-    # 4. 设备101温度 vs 频率比值（固定设备100温度为平均值）
-    ax4 = fig.add_subplot(234)
-    ax4.scatter(clean_data['temp_101'], clean_data['freq_drift'], alpha=0.3, s=5)
-    T2_fit = np.linspace(clean_data['temp_101'].min(), clean_data['temp_101'].max(), 100)
-    T1_fixed = np.full_like(T2_fit, clean_data['temp_100'].mean())
-    y_fit_T2 = joint_frequency_ratio_model([T1_fixed, T2_fit], f01, b1, T01, f02, b2, T02)
-    ax4.plot(T2_fit, y_fit_T2, 'r-', linewidth=2,
-             label=f'设备100固定为{clean_data["temp_100"].mean():.1f}°C时的预测')
-    ax4.set_xlabel('设备101温度 (°C)')
-    ax4.set_ylabel('频率比值 (f1/f2)')
-    ax4.set_title('设备101温度影响 (设备100温度固定)')
-    ax4.legend()
-    # 5. 预测值 vs 实测值
-    ax5 = fig.add_subplot(235)
-    ax5.scatter(clean_data['freq_drift'], y_pred, alpha=0.5, s=5)
-    min_val = min(clean_data['freq_drift'].min(), y_pred.min())
-    max_val = max(clean_data['freq_drift'].max(), y_pred.max())
-    ax5.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='拟合曲线')
-    ax5.set_xlabel('实测频率比值')
-    ax5.set_ylabel('模型预测频率比值')
-    ax5.set_title('模型预测 vs 实测值')
-    ax5.legend()
-    # 6. 残差分析
-    ax6 = fig.add_subplot(236)
-    residuals = clean_data['freq_drift'] - y_pred
-    ax6.scatter(y_pred, residuals, alpha=0.5, s=5)
-    ax6.axhline(y=0, color='r', linestyle='--')
-    ax6.set_xlabel('模型预测值')
-    ax6.set_ylabel('残差 (实测值 - 预测值)')
-    ax6.set_title('残差分析')
-    plt.tight_layout()
-    plt.show()
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
