@@ -193,10 +193,12 @@ def create_comparison_plots(original_df, processed_df, output_dir):
     plt.close()
     
     print(f"平均时延分布对比图已保存到: {output_dir}")
-    print(f"  - 综合对比图: avg_delay_distribution_comparison.png")
-    print(f"  - CDF单独对比图: avg_delay_cdf_comparison.png")
+    print(f"CDF最大差值: {ks_stat:.4f} (位置: {max_diff_x:.2f}μs)")
+    print(f"对数尺度KS统计量: {ks_stat_log:.4f}")
+    
+    return ks_stat, max_diff_x
 
-def create_statistics_comparison(original_stats, processed_stats, output_dir):
+def create_statistics_comparison(original_stats, processed_stats, output_dir, max_cdf_diff=None, max_diff_x=None):
     """创建统计量对比表格"""
     output_dir = Path(output_dir)
     
