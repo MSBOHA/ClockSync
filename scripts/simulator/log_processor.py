@@ -207,12 +207,11 @@ class LogProcessor:
             
         n_lines = len(data)
         logger.info(f"读取到 {n_lines} 行数据")
-        
-        # 提取t1, t2, t3, t4
-        t1_orig = data[:, 0]
-        t2_orig = data[:, 1] 
-        t3_orig = data[:, 2]
-        t4_orig = data[:, 3]
+          # 提取t1, t2, t3, t4 (使用RAW数据，第11-14列)
+        t1_orig = data[:, 10]  # 第11列 (索引10)
+        t2_orig = data[:, 11]  # 第12列 (索引11)
+        t3_orig = data[:, 12]  # 第13列 (索引12)
+        t4_orig = data[:, 13]  # 第14列 (索引13)
         
         # 初始化修改后的时间戳
         t1_mod = t1_orig.copy()
@@ -242,41 +241,66 @@ class LogProcessor:
                     t3_mod[i] = t3_orig[i]
                 else:
                     t2_mod[i] = t2_mod[i-1] + (t2_orig[i] - t2_orig[i-1]) + freq_drift
-                    t3_mod[i] = t3_mod[i-1] + (t3_orig[i] - t3_orig[i-1]) + freq_drift        # 应用负载影响
-        if apply_load:
+                    t3_mod[i] = t3_mod[i-1] + (t3_orig[i] - t3_orig[i-1]) + freq_drift        # 应用负载影响        if apply_load:
             logger.info("应用负载影响...")
             
-            # 采样负载的增量影响（相对于基准负载）
-            uplink_impact_cpu = self.sample_load_impact('cpu', cpu_load, '上行', n_lines)
-            downlink_impact_cpu = self.sample_load_impact('cpu', cpu_load, '下行', n_lines)
+            # 计算原始数据的延迟特征：使用均值作为基准
+            raw_delay = ((t2_orig - t1_orig) - (t3_orig - t4_orig)) / 2
+            min_raw_delay = np.min(raw_delay) 
+            mean_raw_delay = np.mean(raw_delay)
             
-            # 网络负载增量影响
-            uplink_impact_net = self.sample_load_impact('network', network_load, '上行', n_lines)
-            downlink_impact_net = self.sample_load_impact('network', network_load, '下行', n_lines)
-              # 合成总增量时延 (微秒转秒)
-            dsm = (uplink_impact_cpu + uplink_impact_net) * 1e-6  # 上行增量时延
-            dms = (downlink_impact_cpu + downlink_impact_net) * 1e-6  # 下行增量时延
+            logger.info(f"原始延迟统计: 最小值={min_raw_delay*1e6:.2f} μs, 平均值={mean_raw_delay*1e6:.2f} μs")
+            logger.info(f"使用均值作为基准延迟")
+
+            # 采样负载的绝对延迟值
+            uplink_delay_cpu = self.sample_load_impact('cpu', cpu_load, '上行', n_lines)
+            downlink_delay_cpu = self.sample_load_impact('cpu', cpu_load, '下行', n_lines)
             
-            # 输出详细统计信息
-            logger.info(self.format_stats(uplink_impact_cpu, f"CPU {cpu_load}%负载增量-上行"))
-            logger.info(self.format_stats(downlink_impact_cpu, f"CPU {cpu_load}%负载增量-下行"))
-            logger.info(self.format_stats(uplink_impact_net, f"网络 {network_load}Mbps负载增量-上行"))
-            logger.info(self.format_stats(downlink_impact_net, f"网络 {network_load}Mbps负载增量-下行"))
-            logger.info(self.format_stats(dsm*1e6, f"总上行增量dsm"))
-            logger.info(self.format_stats(dms*1e6, f"总下行增量dms"))
+            # 网络负载绝对延迟
+            uplink_delay_net = self.sample_load_impact('network', network_load, '上行', n_lines)
+            downlink_delay_net = self.sample_load_impact('network', network_load, '下行', n_lines)
             
-            # 按照您的要求应用时延: t1, t2+dsm, t3+dsm, t4+dsm+dms
-            # t1保持不变
-            t2_mod += dsm     # t2增加上行时延
-            t3_mod += dsm     # t3增加上行时延  
-            t4_mod += dsm + dms  # t4增加上行+下行时延
-        
-        # 构建输出数据
+            # 对比线性组合和非线性组合
+            d_ms_linear = (uplink_delay_cpu + uplink_delay_net) * 1e-6
+            d_sm_linear = (downlink_delay_cpu + downlink_delay_net) * 1e-6
+              # 使用线性组合
+            d_ms = d_ms_linear
+            d_sm = d_sm_linear            # 随机选择策略：只对一部分数据点增加延迟
+            impact_ratio = 0.9*(network_load/ 600)  # 根据网络负载调整影响比例
+            n_affected = int(n_lines * impact_ratio)
+            affected_indices = np.random.choice(n_lines, n_affected, replace=False)
+            
+            # 初始化延迟数组（默认为0）
+            d_ms_selective = np.zeros(n_lines)
+            d_sm_selective = np.zeros(n_lines)
+            
+            # 只对选中的数据点增加延迟
+            d_ms_selective[affected_indices] = d_ms[affected_indices]
+            d_sm_selective[affected_indices] = d_sm[affected_indices]
+            
+            # 使用选择性延迟
+            d_ms = d_ms_selective
+            d_sm = d_sm_selective            # 简化输出
+            logger.info(f"随机选择策略: 影响{n_affected}/{n_lines}个数据点 ({impact_ratio:.0%})")
+            logger.info(self.format_stats(d_ms*1e6, f"实际上行延迟"))
+            logger.info(self.format_stats(d_sm*1e6, f"实际下行延迟"))
+
+            # 简化延迟处理：只对被选中的数据点进行修改
+            t2_mod = t2_orig.copy()  # 其他点保持原值
+            t3_mod = t3_orig.copy()  
+            t4_mod = t4_orig.copy()
+            
+            # 只对被选中的数据点应用延迟修改
+            t2_mod[affected_indices] = t2_mod[affected_indices] - mean_raw_delay + d_ms[affected_indices]
+            t3_mod[affected_indices] = t3_mod[affected_indices] - mean_raw_delay + d_ms[affected_indices]
+            t4_mod[affected_indices] = t4_mod[affected_indices] - 2*mean_raw_delay + d_ms[affected_indices] + d_sm[affected_indices]
+
+        # 构建输出数据 (修改RAW数据列)
         output_data = data.copy()
-        output_data[:, 0] = t1_mod
-        output_data[:, 1] = t2_mod
-        output_data[:, 2] = t3_mod
-        output_data[:, 3] = t4_mod
+        output_data[:, 10] = t1_mod  # 第11列
+        output_data[:, 11] = t2_mod  # 第12列
+        output_data[:, 12] = t3_mod  # 第13列
+        output_data[:, 13] = t4_mod  # 第14列
         
         # 写入输出文件
         self.save_log_file(output_data, output_file)
@@ -303,13 +327,12 @@ class LogProcessor:
         Returns:
             数据数组，前4列为t1,t2,t3,t4
         """
-        try:
-            # 尝试直接读取为数值
+        try:            # 尝试直接读取为数值
             data = np.loadtxt(filepath)
-            if data.shape[1] >= 4:
+            if data.shape[1] >= 14:  # 至少需要14列才能访问RAW数据
                 return data
             else:
-                logger.error(f"日志文件列数不足: {data.shape[1]} < 4")
+                logger.error(f"日志文件列数不足: {data.shape[1]} < 14 (需要访问RAW数据)")
                 return None
                 
         except Exception as e:
@@ -323,10 +346,10 @@ class LogProcessor:
                 data = []
                 for line in lines:
                     parts = line.split()
-                    if len(parts) >= 4:
+                    if len(parts) >= 14:  # 至少需要14列才能访问RAW数据
                         try:
-                            # 尝试提取前4个数值
-                            row = [float(parts[i]) for i in range(min(len(parts), 10))]  # 最多10列
+                            # 提取所有可用列
+                            row = [float(parts[i]) for i in range(min(len(parts), 28))]  # 最多28列
                             data.append(row)
                         except ValueError:
                             continue
@@ -399,13 +422,12 @@ class LogProcessor:
                 
                 # 线性插值合成
                 interpolated_samples = weight_lower * samples_lower + weight_upper * samples_upper
-                return interpolated_samples
-                  # 如果超过100%，直接从100%采样
+                return interpolated_samples        # 如果超过100%，直接从100%采样
         return self.sample_delay_from_gmm('cpu', 4, direction, n_samples)
     
     def sample_load_impact(self, load_type: str, load_level: float, direction: str, n_samples: int = 1) -> np.ndarray:
         """
-        采样负载的增量影响（相对于统一基准CPU25%）
+        采样负载的绝对延迟值（不再计算增量，因为在应用时会减去原始均值）
         
         Args:
             load_type: 负载类型 ('cpu' 或 'network')
@@ -414,47 +436,26 @@ class LogProcessor:
             n_samples: 采样数量
             
         Returns:
-            负载增量时延 (微秒)
-        """        # 统一基准：CPU25%的固定基准值
-        baseline_delay = self.get_baseline_delay(direction)
-        
+            负载绝对时延 (微秒)，确保 >= 0
+        """        
         if load_type == 'cpu':
             if load_level <= 25:
-                # 小于等于基准负载，按比例缩放CPU25%的时延
-                if load_level <= 0:
-                    # 0%CPU负载，无时延增量
-                    return np.zeros(n_samples)
-                else:
-                    # 按比例缩放：load_level/25
-                    base_samples = self.sample_delay_from_gmm('cpu', 1, direction, n_samples)
-                    scale_factor = load_level / 25.0
-                    load_samples = base_samples * scale_factor
-                  # 计算增量并截断负值
-                impact = load_samples - baseline_delay
-                impact = np.maximum(impact, 0)
-                return impact
+                # 低于或等于25%时，直接从CPU25%采样（基准负载）
+                # 不进行缩放，因为即使是低负载也有基础的网络延迟
+                return self.sample_delay_from_gmm('cpu', 1, direction, n_samples)
             else:
                 # 使用插值采样获取负载下的时延
                 load_samples = self.sample_cpu_delay_interpolated(load_level, direction, n_samples)
-                # 返回增量：负载时延 - 基准时延
-                impact = load_samples - baseline_delay
-                # 负值截断：如果小于0就取0（无负载影响）
-                impact = np.maximum(impact, 0)
-                return impact
+                return load_samples
                 
         elif load_type == 'network':
-            # 获取网络基准时延（网络100Mbps）
-            network_baseline_delay = self.get_network_baseline_delay(direction)
-            
             # 使用插值采样网络负载时延
             load_samples = self.sample_network_delay_interpolated(load_level, direction, n_samples)
-            # 返回增量：网络负载时延 - 网络基准时延（100Mbps）
-            impact = load_samples - network_baseline_delay            # 负值截断：如果小于0就取0（无负载影响）
-            impact = np.maximum(impact, 0)
-            return impact
+            return load_samples
         else:
             logger.warning(f"未知负载类型: {load_type}")
-            return np.zeros(n_samples)
+            return np.full(n_samples, 1.0)  # 返回最小延迟
+    
     def get_baseline_delay(self, direction: str) -> float:
         """
         获取基准时延值（CPU25%作为基准）
@@ -467,12 +468,12 @@ class LogProcessor:
         """
         key = f"baseline_{direction}"
         if key not in self.baseline_samples_cache:
-            # 从CPU25%（cpu1）采样5000次，取中位数作为基准，保留合理的波动特征
+            # 从CPU25%（cpu1）采样5000次，取中位数作为基准
             samples = self.sample_delay_from_gmm('cpu', 1, direction, 5000)
             baseline_value = np.median(samples)  # 使用中位数作为基准
             
             self.baseline_samples_cache[key] = baseline_value
-            logger.info(f"计算CPU基准时延 {direction}: {baseline_value:.2f} μs (基于CPU25%，5000次采样的中位数)")
+            logger.info(f"计算基准时延 {direction}: {baseline_value:.2f} μs (基于CPU25%，5000次采样的中位数)")
         
         return self.baseline_samples_cache[key]
     
@@ -508,12 +509,11 @@ class LogProcessor:
             
         Returns:
             采样的时延值 (微秒)
-        """
-        # 处理小于100Mbps的情况：按比例缩放100Mbps的采样值
+        """        # 处理小于100Mbps的情况：按比例缩放100Mbps的采样值
+        # 网络负载影响较大，需要精确反映负载水平的差异
         if network_mbps <= 100:
             base_samples = self.sample_delay_from_gmm('network', 100, direction, n_samples)
             if network_mbps <= 0:
-
                 # 0负载，无时延增量
                 return np.zeros(n_samples)
             else:

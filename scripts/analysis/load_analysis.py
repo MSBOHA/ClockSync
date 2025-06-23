@@ -20,19 +20,18 @@ from config import AnalysisConfig
 def analyze_load_conditions():
     """分析不同负载条件下的时钟同步性能"""
     print("🔬 负载条件分析 - LSQ拟合 + GMM时延分布")
-    print("=" * 80)
-    # 配置专门针对负载分析的参数
+    print("=" * 80)    # 配置专门针对负载分析的参数
     config = AnalysisConfig(
-        output_dir='../../results/load_analysis_lsq',  # 输出到根目录的results下
+        output_dir='results/load_analysis_lsq',  # 相对于项目根目录
         # LSQ拟合配置
         fit_method='lsq',
         piecewise_fit=True,
         piece_num=10,  # 10段拟合
-        fit_lower_percent=0.02,
-        fit_upper_percent=0.4,
-        # GMM配置 - 固定5个组件
+        fit_lower_percent=0.01,
+        fit_upper_percent=0.1,
+        # GMM配置 - 固定8个组件
         enable_gmm=True,
-        gmm_n_components_range=(5, 5),  # 固定使用5个组件
+        gmm_n_components_range=(8, 8),  # 固定使用8个组件
         gmm_log_transform=True,
         # 数据过滤
         lower_percent=0.005,
@@ -48,33 +47,35 @@ def analyze_load_conditions():
     
     if not load_files:
         print("❌ 未找到负载测试文件")
-        return
-    
-    print(f"📁 找到 {len(load_files)} 个负载测试文件")
+        return    print(f"找到 {len(load_files)} 类负载测试文件")
     for category, files in load_files.items():
         print(f"  {category}: {len(files)} 个文件")
-    
-    # 执行批量分析
+      # 执行批量分析
     analyzer = ClockSyncAnalyzer(config)
     
     all_results = {}
     
     for category, files in load_files.items():
-        print(f"\n🧪 分析 {category} 负载...")
-        print("-" * 60)
+        print(f"\n分析 {category} 负载...")
         
-        category_results = analyzer.analyze_batch(files)
-        all_results[category] = category_results
-        
-        if category_results and category_results['successful_files'] > 0:
-            print(f"✅ {category} 分析完成: {category_results['successful_files']}/{category_results['total_files']} 个文件成功")
-        else:
-            print(f"❌ {category} 分析失败")
+        try:
+            category_results = analyzer.analyze_batch(files)
+            all_results[category] = category_results
+            
+            if category_results and category_results.get('successful_files', 0) > 0:
+                print(f"✅ {category} 完成: {category_results['successful_files']}/{category_results['total_files']} 成功")
+            else:
+                print(f"❌ {category} 分析失败")
+        except Exception as e:
+            print(f"❌ {category} 分析出错: {str(e)}")
+            all_results[category] = None
     
     # 生成负载对比报告
-    generate_load_comparison_report(all_results, config.output_dir)
-    
-    print(f"\n🎉 负载分析完成！结果保存在: {config.output_dir}")
+    try:
+        generate_load_comparison_report(all_results, config.output_dir)
+        print(f"\n负载分析完成！结果保存在: {config.output_dir}")
+    except Exception as e:
+        print(f"❌ 报告生成失败: {str(e)}")
     
     return all_results
 
@@ -93,14 +94,22 @@ def get_load_test_files():
     if os.path.exists(cpu_dir):
         for file in os.listdir(cpu_dir):
             if file.startswith('log') and file.endswith('.log') and 'original' in file:
-                load_files['CPU负载'].append(os.path.join(cpu_dir, file))
+                full_path = os.path.join(cpu_dir, file)
+                load_files['CPU负载'].append(full_path)
+                print(f"  找到CPU负载文件: {file}")
+    else:
+        print(f"❌ CPU负载目录不存在: {cpu_dir}")
     
     # 网络流量负载文件
     traffic_dir = os.path.join(base_dir, 'traffic_load', '流量负载')
     if os.path.exists(traffic_dir):
         for file in os.listdir(traffic_dir):
             if file.startswith('log') and file.endswith('.log') and 'original' in file:
-                load_files['网络流量负载'].append(os.path.join(traffic_dir, file))
+                full_path = os.path.join(traffic_dir, file)
+                load_files['网络流量负载'].append(full_path)
+                print(f"  找到网络负载文件: {file}")
+    else:
+        print(f"❌ 网络负载目录不存在: {traffic_dir}")
     
     # 过滤掉空的类别
     load_files = {k: v for k, v in load_files.items() if v}
@@ -110,7 +119,12 @@ def get_load_test_files():
 
 def generate_load_comparison_report(all_results, output_dir):
     """生成负载对比报告"""
-    print("\n📊 生成负载对比报告...")
+    print("\n生成负载对比报告...")
+    
+    # 确保输出目录存在
+    os.makedirs(output_dir, exist_ok=True)
+    reports_dir = os.path.join(output_dir, 'reports')
+    os.makedirs(reports_dir, exist_ok=True)
     
     report_data = {
         'analysis_timestamp': datetime.now().isoformat(),
@@ -229,28 +243,27 @@ def generate_load_comparison_report(all_results, output_dir):
         
         comparison_stats.append(category_stats)
         report_data['detailed_results'][category] = results
-    
-    # 保存对比统计表
+      # 保存对比统计表
     if comparison_stats:
         comparison_df = pd.DataFrame(comparison_stats)
         comparison_path = os.path.join(output_dir, 'reports', 'load_comparison_summary.csv')
         os.makedirs(os.path.dirname(comparison_path), exist_ok=True)
         comparison_df.to_csv(comparison_path, index=False, encoding='utf-8-sig')
-        print(f"  📋 负载对比统计已保存: {comparison_path}")
+        print(f"负载对比统计已保存: {comparison_path}")
     
     # 保存GMM对比表
     if gmm_comparison:
         gmm_df = pd.DataFrame(gmm_comparison)
         gmm_path = os.path.join(output_dir, 'reports', 'gmm_comparison_detailed.csv')
         gmm_df.to_csv(gmm_path, index=False, encoding='utf-8-sig')
-        print(f"  🔍 GMM对比详情已保存: {gmm_path}")
+        print(f"GMM对比详情已保存: {gmm_path}")
     
     # 保存完整报告
     report_data['summary'] = comparison_stats
     report_path = os.path.join(output_dir, 'reports', 'load_analysis_comprehensive_report.json')
     with open(report_path, 'w', encoding='utf-8') as f:
         json.dump(report_data, f, indent=2, ensure_ascii=False, default=str)
-    print(f"  📄 完整报告已保存: {report_path}")
+    print(f"完整报告已保存: {report_path}")
     
     # 打印摘要
     print_load_analysis_summary(comparison_stats, gmm_comparison)
@@ -258,24 +271,23 @@ def generate_load_comparison_report(all_results, output_dir):
 
 def print_load_analysis_summary(comparison_stats, gmm_comparison):
     """打印负载分析摘要"""
-    print("\n📊 负载分析摘要")
-    print("=" * 80)
+    print("\n负载分析摘要")
+    print("=" * 60)
     
     if comparison_stats:
-        print("🎯 拟合质量对比:")
-        print(f"{'负载类型':<15} {'成功率':<8} {'平均RMSE':<12} {'平均R²':<10} {'数据点数':<12}")
-        print("-" * 70)
+        print("拟合质量对比:")
+        print(f"{'负载类型':<15} {'成功率':<8} {'平均RMSE':<12} {'平均R²':<10}")
+        print("-" * 50)
         
         for stats in comparison_stats:
             success_rate = f"{stats.get('success_rate', 0)*100:.1f}%"
             avg_rmse = f"{stats.get('avg_rmse', 0):.2f}" if stats.get('avg_rmse') else "N/A"
             avg_r2 = f"{stats.get('avg_r2', 0):.3f}" if stats.get('avg_r2') else "N/A"
-            total_points = f"{stats.get('total_data_points', 0):,}" if stats.get('total_data_points') else "N/A"
             
-            print(f"{stats['category']:<15} {success_rate:<8} {avg_rmse:<12} {avg_r2:<10} {total_points:<12}")
+            print(f"{stats['category']:<15} {success_rate:<8} {avg_rmse:<12} {avg_r2:<10}")
     
     if gmm_comparison:
-        print(f"\n🔍 GMM拟合结果 (固定5组件):")
+        print(f"\nGMM拟合结果 (8组件):")
         
         # 按负载类型和时延类型分组
         gmm_by_category = {}
@@ -288,8 +300,8 @@ def print_load_analysis_summary(comparison_stats, gmm_comparison):
                 gmm_by_category[key] = []
             gmm_by_category[key].append(gmm)
         
-        print(f"{'负载类型':<15} {'时延类型':<10} {'平均BIC':<12} {'平均AIC':<12} {'样本数':<8}")
-        print("-" * 70)
+        print(f"{'负载类型':<15} {'时延类型':<10} {'平均BIC':<12} {'平均AIC':<12}")
+        print("-" * 50)
         
         for key, gmm_list in gmm_by_category.items():
             if gmm_list:
@@ -297,20 +309,18 @@ def print_load_analysis_summary(comparison_stats, gmm_comparison):
                 delay_type = gmm_list[0]['delay_type']
                 avg_bic = sum(g['bic'] for g in gmm_list) / len(gmm_list)
                 avg_aic = sum(g['aic'] for g in gmm_list) / len(gmm_list)
-                count = len(gmm_list)
                 
-                print(f"{category:<15} {delay_type:<10} {avg_bic:<12.2f} {avg_aic:<12.2f} {count:<8}")
+                print(f"{category:<15} {delay_type:<10} {avg_bic:<12.2f} {avg_aic:<12.2f}")
     
-    print("\n💡 分析建议:")
+    print("\n分析建议:")
     if comparison_stats:
         best_rmse = min(comparison_stats, key=lambda x: x.get('avg_rmse', float('inf')))
         best_r2 = max(comparison_stats, key=lambda x: x.get('avg_r2', 0))
         
-        print(f"  🏆 最佳拟合质量(RMSE): {best_rmse['category']}")
-        print(f"  🏆 最佳拟合质量(R²): {best_r2['category']}")
-    
-    print(f"  📈 所有结果使用了SVR分段拟合(5段)和GMM拟合(5组件)")
-    print(f"  📊 详细结果和图表已保存到输出目录")
+        print(f"  最佳拟合质量(RMSE): {best_rmse['category']}")
+        print(f"  最佳拟合质量(R²): {best_r2['category']}")
+    print(f"  使用SVR分段拟合(10段)和GMM拟合(8组件)")
+    print(f"  详细结果已保存到输出目录")
 
 
 def analyze_specific_loads(load_levels=None):
@@ -337,12 +347,14 @@ def analyze_specific_loads(load_levels=None):
     
     # 专门的配置
     config = AnalysisConfig(
-        output_dir='../../results/specific_load_analysis_lsq',  # 输出到根目录的results下
+        output_dir='../../results/load_analysis_lsq',  # 输出到根目录的results下
         fit_method='lsq',
         piecewise_fit=True,
+        fit_lower_percent=0.01,
+        fit_upper_percent=0.1,
         piece_num=10,
         enable_gmm=True,
-        gmm_n_components_range=(5, 5),
+        gmm_n_components_range=(8, 8),
         gmm_log_transform=True,
         save_detailed_results=True
     )
@@ -365,30 +377,23 @@ def main():
     parser = argparse.ArgumentParser(description='负载条件分析工具')
     parser.add_argument('--specific_loads', nargs='*', 
                        help='指定要分析的负载等级 (如: 100M 200M cpu1 cpu2)')
-    parser.add_argument('--gmm_components', type=int, default=5,
-                       help='GMM组件数 (默认: 5)')
-    parser.add_argument('--piece_num', type=int, default=5,
-                       help='SVR分段数 (默认: 5)')
     
     args = parser.parse_args()
     
-    print("🚀 负载条件分析工具")
-    print("使用SVR分段拟合进行offset估计")
-    print("使用GMM模型进行时延分布拟合")
-    print("=" * 80)
+    print("负载条件分析工具 - SVR分段拟合 + GMM时延分布")
+    print("=" * 60)
     
     # 全面负载分析
-    print("1️⃣ 执行全面负载分析...")
+    print("执行负载分析...")
     all_results = analyze_load_conditions()
     
     # 特定负载分析 (如果指定)
     if args.specific_loads:
-        print("\n2️⃣ 执行特定负载分析...")
+        print("\n执行特定负载分析...")
         specific_results = analyze_specific_loads(args.specific_loads)
     
-    print("\n🎉 负载分析全部完成！")
-    print("📁 查看 results/load_analysis/ 目录获取完整结果")
-    print("📊 查看 reports/ 子目录获取对比报告")
+    print("\n负载分析完成！")
+    print("查看 results/load_analysis_lsq/ 目录获取完整结果")
 
 
 if __name__ == '__main__':

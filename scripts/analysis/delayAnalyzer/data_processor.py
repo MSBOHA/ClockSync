@@ -102,67 +102,82 @@ class OffsetFitter:
         t1_raw = df["ns2s(getT1(RAW))"]
         offset_raw = df["ns2us(getOffset(RAW))"]
         delay_raw = df["ns2us(getDelay(RAW))"]
-        
-        # 获取用于拟合的数据子集
+          # 获取用于拟合的数据子集
         fit_q_low = delay_raw.quantile(fit_lower_percent)
         fit_q_high = delay_raw.quantile(fit_upper_percent)
         fit_mask = (delay_raw >= fit_q_low) & (delay_raw <= fit_q_high)
         
+        print(f"  分位过滤区间: {fit_q_low:.2f} ~ {fit_q_high:.2f} us")
+        print(f"  过滤前数据点: {len(df)}, 过滤后数据点: {fit_mask.sum()}")
+        
         if piecewise and piece_num > 1:
-            offset_est = self._piecewise_fit(t1_raw, offset_raw, piece_num)
+            # 修复bug: 分段拟合也应该使用过滤后的数据
+            offset_est = self._piecewise_fit(t1_raw[fit_mask], offset_raw[fit_mask], piece_num, t1_raw)
         else:
-            offset_est = self._global_fit(t1_raw[fit_mask], offset_raw[fit_mask], t1_raw)        
+            offset_est = self._global_fit(t1_raw[fit_mask], offset_raw[fit_mask], t1_raw)
         return offset_est
     
     def _global_fit(self, X_fit, y_fit, X_all):
         """全局拟合"""
         if len(X_fit) < 2:
             return np.full_like(X_all.values, np.nan)
+        
         if self.method == 'svr':
             return self._svr_fit(X_fit.values, y_fit.values, X_all.values)
         else:  # lsq
             return self._lsq_fit(X_fit.values, y_fit.values, X_all.values)
     
-    def _piecewise_fit(self, X_all, y_all, piece_num):
+    def _piecewise_fit(self, X_fit, y_fit, piece_num, X_all=None):
         """分段拟合"""
-        print(f"  开始{piece_num}段拟合...")
-        xvals = X_all.values
-        yvals = y_all.values
-        offset_est = np.full_like(xvals, np.nan, dtype=float)
+        print(f"  执行{piece_num}段拟合...")
         
-        # 分段边界
-        xs = np.percentile(xvals, np.linspace(0, 100, piece_num + 1))
-        xs[-1] = xvals.max()
+        # 如果没有提供X_all，使用X_fit
+        if X_all is None:
+            X_all = X_fit
+            
+        xvals_fit = X_fit.values
+        yvals_fit = y_fit.values
+        xvals_all = X_all.values
+        offset_est = np.full_like(xvals_all, np.nan, dtype=float)
+        
+        # 分段边界基于拟合数据
+        xs = np.percentile(xvals_fit, np.linspace(0, 100, piece_num + 1))
+        xs[-1] = xvals_fit.max()
+        
+        total_fit_points = 0
+        total_pred_points = 0
         
         for i in range(piece_num):
-            print(f"  处理第{i+1}/{piece_num}段...")
             if i == piece_num - 1:
-                seg_mask = (xvals >= xs[i]) & (xvals <= xs[i+1])
+                seg_mask_fit = (xvals_fit >= xs[i]) & (xvals_fit <= xs[i+1])
+                seg_mask_all = (xvals_all >= xs[i]) & (xvals_all <= xs[i+1])
             else:
-                seg_mask = (xvals >= xs[i]) & (xvals < xs[i+1])
+                seg_mask_fit = (xvals_fit >= xs[i]) & (xvals_fit < xs[i+1])
+                seg_mask_all = (xvals_all >= xs[i]) & (xvals_all < xs[i+1])
             
-            X_seg = xvals[seg_mask]
-            y_seg = yvals[seg_mask]
+            X_seg = xvals_fit[seg_mask_fit]
+            y_seg = yvals_fit[seg_mask_fit]
+            X_pred = xvals_all[seg_mask_all]
             
             if len(X_seg) < 2:
-                print(f"  第{i+1}段数据点不足，跳过")
                 continue
             
-            print(f"  第{i+1}段数据点数: {len(X_seg)}")
+            total_fit_points += len(X_seg)
+            total_pred_points += len(X_pred)
             
             if self.method == 'svr':
-                pred = self._svr_fit(X_seg, y_seg, X_seg)
+                pred = self._svr_fit(X_seg, y_seg, X_pred)
             else:
-                pred = self._lsq_fit(X_seg, y_seg, X_seg)
+                pred = self._lsq_fit(X_seg, y_seg, X_pred)
             
-            offset_est[seg_mask] = pred
+            offset_est[seg_mask_all] = pred
+        
+        print(f"  拟合完成: 总拟合点数 {total_fit_points}, 总预测点数 {total_pred_points}")
         return offset_est
-    
+
     def _svr_fit(self, X, y, X_pred):
         """SVR拟合"""
         try:
-            print(f"  SVR拟合数据点数: {len(X)}")
-            
             X_mean, X_std = X.mean(), X.std()
             y_mean, y_std = y.mean(), y.std()
             
@@ -171,7 +186,6 @@ class OffsetFitter:
             
             # 如果数据点太多，进行采样以加速拟合
             if len(X) > 5000:
-                print(f"  数据点过多({len(X)})，采样到5000个点进行拟合")
                 indices = np.random.choice(len(X), 5000, replace=False)
                 X_sample = X[indices]
                 y_sample = y[indices]
@@ -184,9 +198,7 @@ class OffsetFitter:
             
             # 使用更快的参数设置
             svr = SVR(kernel='linear', C=10, epsilon=0.1, max_iter=1000)
-            print("  开始SVR训练...")
             svr.fit(X_norm.reshape(-1, 1), y_norm)
-            print("  SVR训练完成")
             
             X_pred_norm = (X_pred - X_mean) / X_std
             pred_norm = svr.predict(X_pred_norm.reshape(-1, 1))

@@ -1,2 +1,2 @@
-python log_processor.py "log0-original.log" "synthetic_200M_test.log" --cpu-load 25 --network-load 200 --temp-100 35.0 --temp-101 55.0
-python simple_comparison.py --original_log "C:\Git_Code\Clock_Sync\data\load_tests_0612\traffic_load\流量负载\log0-original_200M.log" --processed_log "synthetic_200M_test.log" --output_dir "analysis_200M_cdf"
+python log_processor.py "test_base.log" "test_200M.log" --cpu-load 0 --network-load 200 --temp-100 47 --temp-101 61
+python simple_comparison.py --original_log "..\..\data\load_tests_0612\traffic_load\流量负载\log0-original_200M.log" --processed_log "test_200M.log" --output_dir "200M_cmp"
