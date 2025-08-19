@@ -7,7 +7,9 @@ import seaborn as sns
 import numpy as np
 import pandas as pd
 import os
-from scipy.stats import norm
+from scipy.stats import norm, kstest, ks_2samp
+from scipy.integrate import quad
+from sklearn.mixture import GaussianMixture
 
 
 class Visualizer:
@@ -322,3 +324,186 @@ class Visualizer:
         plt.close()
         
         print(f"GMM拟合图已保存: {output_file}")
+
+    def plot_enhanced_cdf_comparison(self, data, gmm_params, name, output_dir):
+        """绘制增强的CDF对比图 - 包含经验分布和拟合分布的CDF，以及KS统计量和KL散度"""
+        self._ensure_chinese_font()  # 确保中文字体设置
+        
+        # 过滤有效数据
+        valid_data = data[~np.isnan(data)]
+        if len(valid_data) == 0:
+            print(f"警告: {name} 没有有效数据进行CDF对比")
+            return
+        
+        # 检查GMM参数
+        if not gmm_params or 'weights' not in gmm_params:
+            print(f"警告: {name} GMM参数缺失，无法绘制CDF对比")
+            return
+        
+        # 数据预处理（与GMM拟合时保持一致）
+        if gmm_params.get('log_transformed', True):
+            # 确保数据为正值
+            positive_data = valid_data[valid_data > 0]
+            if len(positive_data) == 0:
+                print(f"警告: {name} 没有正值数据用于对数变换")
+                return
+            plot_data = positive_data  # 使用原始数据计算CDF
+            log_data = np.log(positive_data)  # 对数变换数据用于GMM
+            data_label = f'{name} (CDF对比)'
+            x_label = '时延值 (μs)'
+        else:
+            plot_data = valid_data
+            log_data = valid_data
+            data_label = name
+            x_label = '时延值 (μs)'
+        
+        # 计算经验累积分布函数(ECDF)
+        sorted_data = np.sort(plot_data)
+        ecdf_y = np.arange(1, len(sorted_data) + 1) / len(sorted_data)
+        
+        # 准备拟合分布的CDF计算
+        weights = np.array(gmm_params['weights'])
+        means = np.array(gmm_params['means'])
+        stds = np.array(gmm_params['stds'])
+        n_components = gmm_params['n_components']
+        
+        # 计算拟合分布的CDF
+        x_range = np.linspace(plot_data.min(), plot_data.max(), 1000)
+        
+        # 如果是对数变换的数据，需要在对数空间计算CDF然后转换回原空间
+        if gmm_params.get('log_transformed', True):
+            log_x_range = np.linspace(log_data.min(), log_data.max(), 1000)
+            fitted_cdf = np.zeros_like(log_x_range)
+            
+            for i in range(n_components):
+                # 在对数空间计算CDF
+                component_cdf = weights[i] * norm.cdf(log_x_range, means[i], stds[i])
+                fitted_cdf += component_cdf
+            
+            # 转换回原空间
+            original_x_range = np.exp(log_x_range)
+            # 重新插值到原空间的x_range
+            fitted_cdf_interp = np.interp(x_range, original_x_range, fitted_cdf)
+        else:
+            fitted_cdf_interp = np.zeros_like(x_range)
+            for i in range(n_components):
+                component_cdf = weights[i] * norm.cdf(x_range, means[i], stds[i])
+                fitted_cdf_interp += component_cdf
+        
+        # 计算KS统计量
+        # 将拟合CDF插值到经验数据点上
+        fitted_cdf_at_data = np.interp(sorted_data, x_range, fitted_cdf_interp)
+        ks_statistic = np.max(np.abs(ecdf_y - fitted_cdf_at_data))
+        
+        # 计算KL散度（近似）
+        # 使用直方图方法近似计算KL散度
+        n_bins = min(100, max(10, len(plot_data) // 50))
+        hist_counts, bin_edges = np.histogram(plot_data, bins=n_bins, density=True)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        bin_width = bin_edges[1] - bin_edges[0]
+        
+        # 计算拟合分布在相同bin上的概率密度
+        if gmm_params.get('log_transformed', True):
+            log_bin_centers = np.log(bin_centers)
+            fitted_pdf = np.zeros_like(log_bin_centers)
+            for i in range(n_components):
+                component_pdf = weights[i] * norm.pdf(log_bin_centers, means[i], stds[i])
+                fitted_pdf += component_pdf
+            # 转换到原空间的PDF
+            fitted_pdf_original = fitted_pdf / bin_centers  # Jacobian transformation
+        else:
+            fitted_pdf_original = np.zeros_like(bin_centers)
+            for i in range(n_components):
+                component_pdf = weights[i] * norm.pdf(bin_centers, means[i], stds[i])
+                fitted_pdf_original += component_pdf
+        
+        # 归一化概率密度
+        empirical_pdf = hist_counts * bin_width
+        fitted_pdf_norm = fitted_pdf_original * bin_width
+        
+        # 避免除零错误
+        empirical_pdf = np.maximum(empirical_pdf, 1e-10)
+        fitted_pdf_norm = np.maximum(fitted_pdf_norm, 1e-10)
+        
+        # 计算KL散度 D(P||Q) = sum(P * log(P/Q))
+        kl_divergence = np.sum(empirical_pdf * np.log(empirical_pdf / fitted_pdf_norm))
+        
+        # 创建CDF对比图
+        plt.figure(figsize=(12, 8))
+        
+        # 绘制经验CDF
+        plt.plot(sorted_data, ecdf_y, 'b-', linewidth=2.5, label='经验累积分布函数 (ECDF)', alpha=0.8)
+        
+        # 绘制拟合CDF
+        plt.plot(x_range, fitted_cdf_interp, 'r-', linewidth=2.5, 
+                label=f'GMM拟合累积分布函数 ({n_components}组件)', alpha=0.8)
+        
+        plt.xlabel(x_label)
+        plt.ylabel('累积概率')
+        plt.title(f'{data_label} - 经验分布与拟合分布CDF对比')
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        
+        # 添加统计信息文本框
+        stats_text = (f'样本数: {len(plot_data):,}\n'
+                     f'KS统计量: {ks_statistic:.4f}\n'
+                     f'KL散度: {kl_divergence:.4f}\n'
+                     f'GMM组件数: {n_components}\n'
+                     f'BIC: {gmm_params.get("bic", "N/A"):.2f}\n'
+                     f'AIC: {gmm_params.get("aic", "N/A"):.2f}')
+        
+        plt.text(0.02, 0.98, stats_text, transform=plt.gca().transAxes,
+                verticalalignment='top', bbox=dict(boxstyle="round,pad=0.4",
+                facecolor="lightblue", alpha=0.8), fontsize=10)
+        
+        # 添加关键百分位数标注
+        key_percentiles = [50, 90, 95, 99]
+        for p in key_percentiles:
+            val = np.percentile(plot_data, p)
+            plt.axvline(val, color='gray', linestyle='--', alpha=0.5)
+            plt.text(val, p/100 + 0.02, f'P{p}', rotation=90, 
+                    verticalalignment='bottom', fontsize=8,
+                    bbox=dict(boxstyle="round,pad=0.1", facecolor="white", alpha=0.7))
+        
+        plt.tight_layout()
+        
+        # 保存图片
+        safe_name = name.replace('/', '_').replace('\\', '_')
+        output_file = os.path.join(output_dir, f'{safe_name}_enhanced_cdf_comparison.png')
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print(f"增强CDF对比图已保存: {output_file}")
+        print(f"  KS统计量: {ks_statistic:.4f}, KL散度: {kl_divergence:.4f}")
+        
+        return {
+            'ks_statistic': ks_statistic,
+            'kl_divergence': kl_divergence,
+            'n_samples': len(plot_data)
+        }
+
+    def plot_real_time_series(self, df, output_dir):
+        """绘制实时时间序列图"""
+        self._ensure_chinese_font()  # 确保中文字体设置
+        
+        # 提取实时数据列
+        t1_real = df["ns2s(getT1(REAL))"]
+        t2t1_real = df["ns2us(getT2T1(REAL))"]
+        t3t4_real = df["ns2us(getT3T4(REAL))"]
+        
+        # 创建图形
+        plt.figure(figsize=(12, 6))
+        
+        # 绘制T2T1和T3T4的时延
+        plt.plot(t1_real * 1e6, t2t1_real, label='T2-T1 (REAL)', alpha=0.7, 
+                marker='.', markersize=2, linestyle='-')
+        plt.plot(t1_real * 1e6, t3t4_real, label='T3-T4 (REAL)', alpha=0.7, 
+                marker='.', markersize=2, linestyle='-')
+        
+        plt.xlabel('时间 (μs)')
+        plt.ylabel('时延 (μs)')
+        plt.title('实时数据 - T2T1和T3T4')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        

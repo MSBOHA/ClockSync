@@ -174,8 +174,7 @@ class LogProcessor:
             
         Returns:
             频率比 f100/f101
-        """
-        # 二次模型: f1/f2 = [f01*(1-b1*(T1-T01)^2)] / [f02*(1-b2*(T2-T02)^2)]
+        """        # 二次模型: f1/f2 = [f01*(1-b1*(T1-T01)^2)] / [f02*(1-b2*(T2-T02)^2)]
         f1 = self.temp_coeffs['f01'] * (1 - self.temp_coeffs['b1'] * (temp_100 - self.temp_coeffs['T01'])**2)
         f2 = self.temp_coeffs['f02'] * (1 - self.temp_coeffs['b2'] * (temp_101 - self.temp_coeffs['T02'])**2)        
         return f1 / f2
@@ -183,6 +182,7 @@ class LogProcessor:
     def process_log_file(self, input_file: str, output_file: str, 
                         cpu_load: float = 25.0, network_load: int = 100,
                         temp_100: float = 35.0, temp_101: float = 55.0,
+                        asymmetry: float = 50.0,
                         apply_temperature: bool = True, apply_load: bool = True):
         """
         处理日志文件，应用温度和负载影响
@@ -194,10 +194,12 @@ class LogProcessor:
             network_load: 网络负载等级 (100-600 Mbps)
             temp_100: 设备100温度 (°C)
             temp_101: 设备101温度 (°C)
-            apply_temperature: 是否应用温度影响            apply_load: 是否应用负载影响
+            asymmetry: 非对称度 (0-100)，50为均衡，<50偏向上行延迟，>50偏向下行延迟
+            apply_temperature: 是否应用温度影响
+            apply_load: 是否应用负载影响
         """
         logger.info(f"开始处理日志文件: {input_file}")
-        logger.info(f"配置: CPU={cpu_load}%, 网络={network_load}Mbps, T100={temp_100}°C, T101={temp_101}°C")
+        logger.info(f"配置: CPU={cpu_load}%, 网络={network_load}Mbps, T100={temp_100}°C, T101={temp_101}°C, 非对称度={asymmetry}")
         
         # 读取原始日志
         data = self.load_log_file(input_file)
@@ -212,12 +214,21 @@ class LogProcessor:
         t2_orig = data[:, 11]  # 第12列 (索引11)
         t3_orig = data[:, 12]  # 第13列 (索引12)
         t4_orig = data[:, 13]  # 第14列 (索引13)
-        
-        # 初始化修改后的时间戳
+          # 初始化修改后的时间戳
         t1_mod = t1_orig.copy()
         t2_mod = t2_orig.copy()
         t3_mod = t3_orig.copy()
-        t4_mod = t4_orig.copy()        # 应用温度影响 - 只影响t2和t3
+        t4_mod = t4_orig.copy()
+        
+        # 计算原始数据的延迟特征（在任何修改之前）
+        raw_delay = ((t2_orig - t1_orig) - (t3_orig - t4_orig)) / 2
+        min_raw_delay = np.min(raw_delay) 
+        mean_raw_delay = np.mean(raw_delay)
+        median_raw_delay = np.median(raw_delay)
+        
+        logger.info(f"原始延迟统计: 最小值={min_raw_delay*1e6:.2f} μs, 平均值={mean_raw_delay*1e6:.2f} μs, 中位数={median_raw_delay*1e6:.2f} μs")
+        
+        # 应用温度影响 - 只影响t2和t3
         if apply_temperature:
             logger.info("应用温度影响...")
             freq_ratio = self.calculate_temperature_effect(temp_100, temp_101)
@@ -241,15 +252,9 @@ class LogProcessor:
                     t3_mod[i] = t3_orig[i]
                 else:
                     t2_mod[i] = t2_mod[i-1] + (t2_orig[i] - t2_orig[i-1]) + freq_drift
-                    t3_mod[i] = t3_mod[i-1] + (t3_orig[i] - t3_orig[i-1]) + freq_drift        # 应用负载影响        if apply_load:
+                    t3_mod[i] = t3_mod[i-1] + (t3_orig[i] - t3_orig[i-1]) + freq_drift        # 应用负载影响
+        if apply_load:
             logger.info("应用负载影响...")
-            
-            # 计算原始数据的延迟特征：使用均值作为基准
-            raw_delay = ((t2_orig - t1_orig) - (t3_orig - t4_orig)) / 2
-            min_raw_delay = np.min(raw_delay) 
-            mean_raw_delay = np.mean(raw_delay)
-            
-            logger.info(f"原始延迟统计: 最小值={min_raw_delay*1e6:.2f} μs, 平均值={mean_raw_delay*1e6:.2f} μs")
             logger.info(f"使用均值作为基准延迟")
 
             # 采样负载的绝对延迟值
@@ -259,41 +264,62 @@ class LogProcessor:
             # 网络负载绝对延迟
             uplink_delay_net = self.sample_load_impact('network', network_load, '上行', n_lines)
             downlink_delay_net = self.sample_load_impact('network', network_load, '下行', n_lines)
-            
-            # 对比线性组合和非线性组合
             d_ms_linear = (uplink_delay_cpu + uplink_delay_net) * 1e-6
             d_sm_linear = (downlink_delay_cpu + downlink_delay_net) * 1e-6
-              # 使用线性组合
-            d_ms = d_ms_linear
-            d_sm = d_sm_linear            # 随机选择策略：只对一部分数据点增加延迟
-            impact_ratio = 0.9*(network_load/ 600)  # 根据网络负载调整影响比例
-            n_affected = int(n_lines * impact_ratio)
-            affected_indices = np.random.choice(n_lines, n_affected, replace=False)
             
-            # 初始化延迟数组（默认为0）
-            d_ms_selective = np.zeros(n_lines)
-            d_sm_selective = np.zeros(n_lines)
+            # 应用非对称度调整 (0-100, 50为均衡)
+            # asymmetry = 0: 全部偏向上行 (d_ms增强, d_sm减弱)
+            # asymmetry = 50: 保持均衡 (原始比例)
+            # asymmetry = 100: 全部偏向下行 (d_ms减弱, d_sm增强)
             
-            # 只对选中的数据点增加延迟
-            d_ms_selective[affected_indices] = d_ms[affected_indices]
-            d_sm_selective[affected_indices] = d_sm[affected_indices]
-            
-            # 使用选择性延迟
-            d_ms = d_ms_selective
-            d_sm = d_sm_selective            # 简化输出
-            logger.info(f"随机选择策略: 影响{n_affected}/{n_lines}个数据点 ({impact_ratio:.0%})")
-            logger.info(self.format_stats(d_ms*1e6, f"实际上行延迟"))
-            logger.info(self.format_stats(d_sm*1e6, f"实际下行延迟"))
+            # 计算调整因子：0到50时上行因子从2.0到1.0，下行因子从0.0到1.0
+            # 50到100时上行因子从1.0到0.0，下行因子从1.0到2.0
+            if asymmetry <= 50:
+                uplink_factor = 2.0 - asymmetry / 50.0  # 50时为1.0，0时为2.0
+                downlink_factor = asymmetry / 50.0       # 50时为1.0，0时为0.0
+            else:
+                uplink_factor = 2.0 - asymmetry / 50.0   # 100时为0.0，50时为1.0
+                downlink_factor = (asymmetry - 50) / 50.0 + 1.0  # 100时为2.0，50时为1.0
 
-            # 简化延迟处理：只对被选中的数据点进行修改
-            t2_mod = t2_orig.copy()  # 其他点保持原值
-            t3_mod = t3_orig.copy()  
-            t4_mod = t4_orig.copy()
+            # 应用非对称度调整
+            d_ms_adjusted = d_ms_linear * uplink_factor
+            d_sm_adjusted = d_sm_linear * downlink_factor
+              # 使用调整后的延迟
+            d_ms = d_ms_adjusted
+            d_sm = d_sm_adjusted
             
-            # 只对被选中的数据点应用延迟修改
-            t2_mod[affected_indices] = t2_mod[affected_indices] - mean_raw_delay + d_ms[affected_indices]
-            t3_mod[affected_indices] = t3_mod[affected_indices] - mean_raw_delay + d_ms[affected_indices]
-            t4_mod[affected_indices] = t4_mod[affected_indices] - 2*mean_raw_delay + d_ms[affected_indices] + d_sm[affected_indices]
+            logger.info(f"非对称度调整: asymmetry={asymmetry}, 上行因子={uplink_factor:.2f}, 下行因子={downlink_factor:.2f}")
+            
+            # 直接使用所有数据点，不进行随机选择
+            logger.info(f"对所有{n_lines}个数据点应用负载影响")
+            logger.info(self.format_stats(d_ms*1e6, f"上行延迟"))
+            logger.info(self.format_stats(d_sm*1e6, f"下行延迟"))            # 恢复均值调整逻辑：减去两倍原始均值，再加上负载延迟
+            # 应用到所有数据点
+            t2_mod = t2_orig - 2*mean_raw_delay + d_ms
+            t3_mod = t3_orig - 2*mean_raw_delay + d_ms            # 简化的延迟保证逻辑：确保d_ms和d_sm至少为2倍原始5分位数延迟            # 简化的延迟保证逻辑：确保d_ms和d_sm至少为2倍(中位数+5分位数)/2的延迟
+            p5_raw_delay = np.percentile(raw_delay, 5)
+            threshold_base = p5_raw_delay
+            if network_load < 100:
+                threshold_base  = mean_raw_delay
+            min_delay_threshold = 2 * threshold_base
+            
+            # 调整d_ms：确保不小于阈值
+            d_ms_adjusted = np.maximum(d_ms, min_delay_threshold)
+            d_sm_adjusted = np.maximum(d_sm, min_delay_threshold)
+            
+            # 使用调整后的延迟值
+            t2_mod = t2_orig - 2*mean_raw_delay + d_ms_adjusted
+            t3_mod = t3_orig - 2*mean_raw_delay + d_ms_adjusted
+            t4_mod = t4_orig - 4*mean_raw_delay + d_ms_adjusted + d_sm_adjusted
+            
+            # 验证最终延迟的合理性
+            final_delay = ((t2_mod - t1_mod) - (t3_mod - t4_mod)) / 2
+            final_min_delay = np.min(final_delay)
+            final_mean_delay = np.mean(final_delay)
+            final_median_delay = np.median(final_delay)
+            
+            logger.info(f"最终延迟统计: 最小值={final_min_delay*1e6:.2f} μs, 平均值={final_mean_delay*1e6:.2f} μs, 中位数={final_median_delay*1e6:.2f} μs")
+            logger.info(f"延迟变化: 最小值变化={(final_min_delay-min_raw_delay)*1e6:.2f} μs, 中位数变化={(final_median_delay-median_raw_delay)*1e6:.2f} μs")
 
         # 构建输出数据 (修改RAW数据列)
         output_data = data.copy()
@@ -409,20 +435,22 @@ class LogProcessor:
                 # 对应的CPU等级
                 lower_level = i + 1  # cpu1,2,3,4
                 upper_level = i + 2
-                
-                # 线性插值权重
+                  # 线性插值权重
                 weight_upper = (cpu_percent - lower_percent) / (upper_percent - lower_percent)
                 weight_lower = 1 - weight_upper
                 
                 logger.debug(f"CPU {cpu_percent}% 插值: {lower_percent}%({weight_lower:.3f}) + {upper_percent}%({weight_upper:.3f})")
+                # 概率采样插值：根据权重概率选择从哪个负载等级采样
+                interpolated_samples = np.zeros(n_samples)
+                for j in range(n_samples):
+                    if np.random.random() < weight_lower:
+                        # 从较低负载等级采样
+                        interpolated_samples[j] = self.sample_delay_from_gmm('cpu', lower_level, direction, 1)[0]
+                    else:
+                        # 从较高负载等级采样
+                        interpolated_samples[j] = self.sample_delay_from_gmm('cpu', upper_level, direction, 1)[0]
                 
-                # 从两个等级采样
-                samples_lower = self.sample_delay_from_gmm('cpu', lower_level, direction, n_samples)
-                samples_upper = self.sample_delay_from_gmm('cpu', upper_level, direction, n_samples)
-                
-                # 线性插值合成
-                interpolated_samples = weight_lower * samples_lower + weight_upper * samples_upper
-                return interpolated_samples        # 如果超过100%，直接从100%采样
+                return interpolated_samples# 如果超过100%，直接从100%采样
         return self.sample_delay_from_gmm('cpu', 4, direction, n_samples)
     
     def sample_load_impact(self, load_type: str, load_level: float, direction: str, n_samples: int = 1) -> np.ndarray:
@@ -523,36 +551,68 @@ class LogProcessor:
         
         # 限制上限范围
         network_mbps = min(600, network_mbps)
-        
-        # 如果正好在断点上，直接采样
+          # 如果正好在断点上，先检查是否有对应的GMM模型
         if network_mbps in self.network_breakpoints:
-            return self.sample_delay_from_gmm('network', int(network_mbps), direction, n_samples)
+            key = f"network_{int(network_mbps)}_{direction}"
+            if key in self.gmm_models:
+                # 有对应模型，直接采样
+                return self.sample_delay_from_gmm('network', int(network_mbps), direction, n_samples)
+            else:
+                # 没有对应模型，需要插值
+                logger.info(f"网络负载{network_mbps}Mbps在断点上但无GMM模型，使用插值方法")
         
-        # 找到最近的两个断点
+        # 找到最近的两个断点进行插值
         for i in range(len(self.network_breakpoints) - 1):
             if network_mbps <= self.network_breakpoints[i + 1]:
                 lower_mbps = self.network_breakpoints[i]
                 upper_mbps = self.network_breakpoints[i + 1]
                 
-                # 线性插值权重
+                # 检查两个断点是否都有GMM模型
+                lower_key = f"network_{int(lower_mbps)}_{direction}"
+                upper_key = f"network_{int(upper_mbps)}_{direction}"
+                
+                if lower_key not in self.gmm_models or upper_key not in self.gmm_models:
+                    logger.warning(f"插值所需的GMM模型缺失: {lower_key}({lower_key in self.gmm_models}) {upper_key}({upper_key in self.gmm_models})")
+                    # 寻找其他可用的模型进行插值
+                    available_loads = []
+                    for load in self.network_breakpoints:
+                        test_key = f"network_{int(load)}_{direction}"
+                        if test_key in self.gmm_models:
+                            available_loads.append(load)
+                    
+                    if len(available_loads) >= 2:
+                        # 找到最近的两个可用负载
+                        available_loads.sort()
+                        # 找到目标负载附近的两个点
+                        if network_mbps <= available_loads[0]:
+                            lower_mbps, upper_mbps = available_loads[0], available_loads[1]
+                        elif network_mbps >= available_loads[-1]:
+                            lower_mbps, upper_mbps = available_loads[-2], available_loads[-1]
+                        else:
+                            for j in range(len(available_loads) - 1):
+                                if available_loads[j] <= network_mbps <= available_loads[j + 1]:
+                                    lower_mbps, upper_mbps = available_loads[j], available_loads[j + 1]
+                                    break
+                        logger.info(f"使用可用模型进行插值: {lower_mbps}Mbps 和 {upper_mbps}Mbps")
+                    else:
+                        logger.error(f"可用的网络GMM模型不足，无法插值: {available_loads}")
+                        return np.full(n_samples, 50.0)  # 返回默认时延
+                  # 线性插值权重
                 weight_upper = (network_mbps - lower_mbps) / (upper_mbps - lower_mbps)
                 weight_lower = 1 - weight_upper
-                
                 logger.debug(f"网络 {network_mbps}Mbps 插值: {lower_mbps}Mbps({weight_lower:.3f}) + {upper_mbps}Mbps({weight_upper:.3f})")
-                
-                # 从两个负载点采样
-                samples_lower = self.sample_delay_from_gmm('network', int(lower_mbps), direction, n_samples)
-                samples_upper = self.sample_delay_from_gmm('network', int(upper_mbps), direction, n_samples)
-                
-                # 线性插值合成
-                interpolated_samples = weight_lower * samples_lower + weight_upper * samples_upper
+                print(weight_lower, weight_upper)
+                # 概率采样插值：根据权重概率选择从哪个负载等级采样
+                interpolated_samples = np.zeros(n_samples)
+                for j in range(n_samples):
+                    if np.random.random() < weight_lower:
+                        # 从较低负载等级采样
+                        interpolated_samples[j] = self.sample_delay_from_gmm('network', int(lower_mbps), direction, 1)[0]
+                    else:
+                        # 从较高负载等级采样
+                        interpolated_samples[j] = self.sample_delay_from_gmm('network', int(upper_mbps), direction, 1)[0]
+  
                 return interpolated_samples
-                
-        # 超出范围，使用边界值
-        if network_mbps <= 100:
-            return self.sample_delay_from_gmm('network', 100, direction, n_samples)
-        else:
-            return self.sample_delay_from_gmm('network', 600, direction, n_samples)
     
     def format_stats(self, data: np.ndarray, name: str, unit: str = "μs") -> str:
         """
@@ -591,6 +651,8 @@ def main():
                        help='设备100温度 (°C)')
     parser.add_argument('--temp-101', type=float, default=55.0,
                        help='设备101温度 (°C)')
+    parser.add_argument('--asymmetry', type=float, default=50.0,
+                       help='非对称度 (0-100)，50为均衡，<50偏向上行延迟，>50偏向下行延迟')
     parser.add_argument('--no-temperature', action='store_true',
                        help='不应用温度影响')
     parser.add_argument('--no-load', action='store_true',
@@ -609,12 +671,12 @@ def main():
     
     # 处理日志文件
     processor.process_log_file(
-        input_file=args.input_file,
-        output_file=args.output_file,
+        input_file=args.input_file,        output_file=args.output_file,
         cpu_load=args.cpu_load,
         network_load=args.network_load,
         temp_100=args.temp_100,
         temp_101=args.temp_101,
+        asymmetry=args.asymmetry,
         apply_temperature=not args.no_temperature,
         apply_load=not args.no_load
     )

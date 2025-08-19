@@ -128,17 +128,25 @@ class ClockSyncAnalyzer:
             # 统计量对比图
             if delay_stats:
                 self.visualizer.plot_delay_comparison(delay_stats, plots_dir)
-            
-            # 时延分布图
+              # 时延分布图
+            cdf_comparison_results = {}
             for i, (data, name) in enumerate([(up_delay_est, '自估上行时延'), (down_delay_est, '自估下行时延')]):
                 if not np.isnan(data).all():
                     self.visualizer.plot_delay_distribution(data, name, plots_dir, i)
                     
-                    # GMM拟合图
-                    if name.replace('自估', '') in gmm_results:
+                    # GMM拟合图和增强CDF对比图
+                    gmm_key = name.replace('自估', '')
+                    if gmm_key in gmm_results:
                         self.visualizer.plot_gmm_fit(
-                            data, gmm_results[name.replace('自估', '')], name, plots_dir
+                            data, gmm_results[gmm_key], name, plots_dir
                         )
+                        
+                        # 绘制增强的CDF对比图（经验分布vs拟合分布）
+                        cdf_stats = self.visualizer.plot_enhanced_cdf_comparison(
+                            data, gmm_results[gmm_key], name, plots_dir
+                        )
+                        if cdf_stats:
+                            cdf_comparison_results[gmm_key] = cdf_stats
             
             # 实时时间序列图（可选）
             if self.config.plot_real_time:
@@ -153,11 +161,11 @@ class ClockSyncAnalyzer:
             
             # 保存拟合质量
             self.file_manager.save_fit_quality(fit_quality, self.config, load_level)
-            
-            # 保存时延数据
+              # 保存时延数据
             if self.config.save_detailed_results:
                 self.file_manager.save_delay_data(up_delay_est, down_delay_est, load_level)
-              # 准备结果摘要
+              
+            # 准备结果摘要
             result_summary = {
                 'load_level': load_level,
                 'file_path': log_file,
@@ -165,8 +173,11 @@ class ClockSyncAnalyzer:
                 'fit_quality': fit_quality,
                 'delay_stats': delay_stats,
                 'gmm_results': gmm_results,  # 保存完整的GMM结果，包含所有参数
+                'cdf_comparison': cdf_comparison_results,  # 保存CDF对比统计量
                 'output_dir': load_output_dir
             }
+            # 清理空目录
+            self.file_manager.cleanup_empty_dirs()
             
             print(f"文件 {log_file} 分析完成！")
             return result_summary

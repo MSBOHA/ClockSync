@@ -1,5 +1,5 @@
 {
-  "analysis_timestamp": "2025-06-23T14:09:45.162561",
+  "analysis_timestamp": "2025-06-23T19:05:43.744488",
   "summary": [
     {
       "category": "CPU负载",
@@ -197,6 +197,18 @@
               "original_std": 12.113620567419389
             }
           },
+          "cdf_comparison": {
+            "上行时延": {
+              "ks_statistic": 0.009240961255752578,
+              "kl_divergence": 0.007789386096496192,
+              "n_samples": 17686
+            },
+            "下行时延": {
+              "ks_statistic": 0.006202836453696681,
+              "kl_divergence": 0.00771324657885947,
+              "n_samples": 17686
+            }
+          },
           "output_dir": "results/load_analysis_lsq\\load_1"
         },
         {
@@ -350,6 +362,18 @@
               "n_samples": 18651,
               "original_mean": 124.65679354235849,
               "original_std": 51.90022693495284
+            }
+          },
+          "cdf_comparison": {
+            "上行时延": {
+              "ks_statistic": 0.02344854793173623,
+              "kl_divergence": 0.027206564603928944,
+              "n_samples": 14788
+            },
+            "下行时延": {
+              "ks_statistic": 0.011329341721943553,
+              "kl_divergence": 0.018532938303411402,
+              "n_samples": 18651
             }
           },
           "output_dir": "results/load_analysis_lsq\\load_2"
@@ -507,6 +531,18 @@
               "original_std": 6.306501604931003
             }
           },
+          "cdf_comparison": {
+            "上行时延": {
+              "ks_statistic": 0.004908342966362306,
+              "kl_divergence": 0.00564209930204903,
+              "n_samples": 18968
+            },
+            "下行时延": {
+              "ks_statistic": 0.0049841623577050465,
+              "kl_divergence": 0.006855123528737086,
+              "n_samples": 18968
+            }
+          },
           "output_dir": "results/load_analysis_lsq\\load_3"
         },
         {
@@ -660,6 +696,18 @@
               "n_samples": 17347,
               "original_mean": 89.63095763734063,
               "original_std": 16.957070834574978
+            }
+          },
+          "cdf_comparison": {
+            "上行时延": {
+              "ks_statistic": 0.006178887323039173,
+              "kl_divergence": 0.005899879277654037,
+              "n_samples": 17347
+            },
+            "下行时延": {
+              "ks_statistic": 0.009845995535781582,
+              "kl_divergence": 0.006818152195291903,
+              "n_samples": 17347
             }
           },
           "output_dir": "results/load_analysis_lsq\\load_4"
@@ -829,6 +877,18 @@
               "original_std": 181.92164079498357
             }
           },
+          "cdf_comparison": {
+            "上行时延": {
+              "ks_statistic": 0.009873860136895618,
+              "kl_divergence": 0.0021796337758252346,
+              "n_samples": 18083
+            },
+            "下行时延": {
+              "ks_statistic": 0.006010692664576545,
+              "kl_divergence": -0.07982997137311969,
+              "n_samples": 18083
+            }
+          },
           "output_dir": "results/load_analysis_lsq\\load_100"
         },
         {
@@ -982,6 +1042,18 @@
               "n_samples": 18965,
               "original_mean": 235.10194266193812,
               "original_std": 283.6366530838194
+            }
+          },
+          "cdf_comparison": {
+            "上行时延": {
+              "ks_statistic": 0.009913527692772095,
+              "kl_divergence": 0.35474343279427073,
+              "n_samples": 18965
+            },
+            "下行时延": {
+              "ks_statistic": 0.006087455970209654,
+              "kl_divergence": 0.06941474250233928,
+              "n_samples": 18965
             }
           },
           "output_dir": "results/load_analysis_lsq\\load_200"
@@ -1139,6 +1211,18 @@
               "original_std": 234.1921973287863
             }
           },
+          "cdf_comparison": {
+            "上行时延": {
+              "ks_statistic": 0.008912188194381387,
+              "kl_divergence": -0.011464076923029871,
+              "n_samples": 18908
+            },
+            "下行时延": {
+              "ks_statistic": 0.03264848316532787,
+              "kl_divergence": 0.021365857540045684,
+              "n_samples": 18908
+            }
+          },
           "output_dir": "results/load_analysis_lsq\\load_300"
         },
         {
@@ -1292,6 +1376,18 @@
               "n_samples": 18775,
               "original_mean": 210.46519434995562,
               "original_std": 220.1612576846414
+            }
+          },
+          "cdf_comparison": {
+            "上行时延": {
+              "ks_statistic": 0.009836522081592802,
+              "kl_divergence": 0.04207450083524152,
+              "n_samples": 18775
+            },
+            "下行时延": {
+              "ks_statistic": 0.011227271404739558,
+              "kl_divergence": 0.01821293140624124,
+              "n_samples": 18775
             }
           },
           "output_dir": "results/load_analysis_lsq\\load_400"
@@ -1449,6 +1545,18 @@
               "original_std": 242.04583171825985
             }
           },
+          "cdf_comparison": {
+            "上行时延": {
+              "ks_statistic": 0.009743127490705161,
+              "kl_divergence": 0.015416737404945887,
+              "n_samples": 18891
+            },
+            "下行时延": {
+              "ks_statistic": 0.016406301240750598,
+              "kl_divergence": 0.019981977711441386,
+              "n_samples": 18891
+            }
+          },
           "output_dir": "results/load_analysis_lsq\\load_500"
         },
         {
@@ -1602,6 +1710,18 @@
               "n_samples": 18793,
               "original_mean": 347.3669238210435,
               "original_std": 312.51323796107323
+            }
+          },
+          "cdf_comparison": {
+            "上行时延": {
+              "ks_statistic": 0.00657677868645834,
+              "kl_divergence": -0.04011245430262324,
+              "n_samples": 18793
+            },
+            "下行时延": {
+              "ks_statistic": 0.014375230798984812,
+              "kl_divergence": 0.01645999268477754,
+              "n_samples": 18793
             }
           },
           "output_dir": "results/load_analysis_lsq\\load_600"

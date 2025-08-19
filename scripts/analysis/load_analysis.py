@@ -38,7 +38,7 @@ def analyze_load_conditions():
         upper_percent=0.995,
         # 其他设置
         batch_mode=True,
-        save_detailed_results=True,
+        save_detailed_results=True,  # 确保保存详细结果
         plot_real_time=False
     )
     

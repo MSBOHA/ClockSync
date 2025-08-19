@@ -16,8 +16,14 @@ Clock_Sync/
 │
 ├── scripts/   # 存放分析脚本和模型代码
 │   ├── analysis/                  # 数据分析和绘图脚本
-│   │   └── performance_comparison.py  # (原 0524/performance_cmp.py)
+│   │   ├── delayAnalyzer/         # 延迟分析器 - 负载影响建模与分析
+│   │   │   ├── data_processor.py    # 数据处理器：GMM拟合、分段分析、统计计算
+│   │   │   └── load_analysis.py     # 负载分析：批量处理不同负载下的延迟分布
+│   │   ├── performance_comparison.py  # (原 0524/performance_cmp.py)
 │   │   └── ... (其他特定分析脚本可放于此)
+│   ├── simulator/                 # 日志模拟器 - 温度和负载影响模拟
+│   │   ├── log_processor.py         # 日志处理器：应用温度/负载效应到原始日志
+│   │   └── simple_comparison.py     # 对比分析：原始vs处理后日志的分布对比
 │   └── models/                    # 独立模型或算法实现
 │       └── kalman_filter.py         # (原 0607/kalman.py)
 │
@@ -33,7 +39,134 @@ Clock_Sync/
     └── old_data_analysis/
 ```
 
---- 
+---
+
+## 主要工具功能说明
+
+### 延迟分析器 (delayAnalyzer)
+
+**位置**: `scripts/analysis/delayAnalyzer/`
+
+#### 1. 数据处理器 (`data_processor.py`)
+负责处理时钟同步日志，提取延迟数据并进行统计建模：
+
+**核心功能**:
+- **延迟提取**: 从RAW时间戳(t1,t2,t3,t4)计算网络延迟
+- **GMM建模**: 使用高斯混合模型拟合延迟分布
+- **分段分析**: 支持按负载区间分段拟合，提高模型精度
+- **统计分析**: 计算延迟分布的各种统计量(均值、标准差、分位数等)
+- **可视化**: 生成延迟分布图、ECDF图、GMM拟合效果图
+
+**支持的延迟类型**:
+- 自估上行延迟: `(t2-t1)/2`
+- 自估下行延迟: `(t4-t3)/2`  
+- 平均延迟: `((t4-t1)-(t3-t2))/2`
+
+**输出**:
+- GMM参数文件 (.pkl, .json)
+- 统计报告 (.csv, .txt)
+- 可视化图表 (.png)
+
+#### 2. 负载分析器 (`load_analysis.py`)
+批量分析不同负载条件下的延迟特征：
+
+**功能**:
+- 批量处理多个负载等级的日志文件
+- 生成负载vs延迟的对比报告
+- 支持CPU负载和网络流量负载分析
+- 自动化GMM拟合和统计分析流程
+
+### 日志模拟器 (simulator)
+
+**位置**: `scripts/simulator/`
+
+#### 1. 日志处理器 (`log_processor.py`)
+基于温度-频率模型和负载影响模型，对原始日志施加噪声：
+
+**核心功能**:
+- **温度效应建模**: 基于二次函数模型 `f = f0*(1-b*(T-T0)^2)` 模拟温度对时钟频率的影响
+- **负载影响采样**: 从预训练的GMM模型采样负载相关延迟
+- **非对称度控制**: 支持0-100的非对称度参数，控制上行/下行延迟比例
+- **随机选择策略**: 随机选择部分数据点应用延迟，保持分布的真实性
+- **RAW数据修改**: 只修改RAW时间戳列(第11-14列)，保持其他数据不变
+
+**参数配置**:
+```bash
+python log_processor.py input.log output.log \
+  --cpu-load 50 \          # CPU负载百分比 (0-100)
+  --network-load 300 \     # 网络负载 (100-600 Mbps)
+  --temp-100 45 \          # 设备100温度 (°C)
+  --temp-101 65 \          # 设备101温度 (°C)
+  --asymmetry 30           # 非对称度 (0-100, 50为均衡)
+```
+
+**延迟合成逻辑**:
+- 选中的数据点: `t2/t3 += d_ms`, `t4 += d_ms + d_sm`
+- 未选中的数据点: 保持原始值不变
+- 非对称度影响: `asymmetry<50`偏向上行，`>50`偏向下行
+
+#### 2. 对比分析器 (`simple_comparison.py`)
+对比原始日志与处理后日志的延迟分布差异：
+
+**分析指标**:
+- **KS统计量**: Kolmogorov-Smirnov检验，度量分布相似性
+- **KL散度**: Kullback-Leibler散度，度量分布信息差异  
+- **分位数对比**: 各种百分位数的差异分析
+- **CDF分析**: 累积分布函数的最大差值和位置
+
+**可视化输出**:
+- 密度直方图对比 (常规尺度 + 对数尺度)
+- CDF对比图 (常规尺度 + 对数尺度)
+- 统计量对比表格
+- 分析报告 (.md格式)
+
+**使用示例**:
+```bash
+python simple_comparison.py \
+  --original_log original.log \
+  --processed_log processed.log \
+  --output_dir comparison_results
+```
+
+**特色功能**:
+- 原始数据自动分位过滤 (1%-99%) 去除异常值
+- 处理后数据保持完整，不做过滤
+- 支持KL散度和KS统计量双重评估
+- 自动生成详细的markdown分析报告
+
+---
+
+## 使用流程示例
+
+### 1. 延迟分析流程
+```bash
+# 1. 分析单个日志的延迟分布
+cd scripts/analysis/delayAnalyzer
+python data_processor.py --input ../../../data/load_tests_0612/cpu_load/log0-original.log \
+                         --output_dir ../../../results/delay_analysis \
+                         --load_level 1
+
+# 2. 批量分析多个负载条件
+python load_analysis.py --input_dir ../../../data/load_tests_0612/cpu_load \
+                        --output_dir ../../../results/load_comparison
+```
+
+### 2. 日志模拟流程  
+```bash
+# 1. 生成受负载影响的合成日志
+cd scripts/simulator
+python log_processor.py ../../../data/load_tests_0612/cpu_load/log0-original.log \
+                        synthetic_high_load.log \
+                        --cpu-load 75 --network-load 500 --asymmetry 30
+
+# 2. 对比分析原始vs合成日志
+python simple_comparison.py \
+  --original_log ../../../data/load_tests_0612/cpu_load/log0-original.log \
+  --processed_log synthetic_high_load.log \
+  --output_dir load_effect_analysis
+```
+
+---
 
 ## 数据格式说明
 

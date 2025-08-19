@@ -24,6 +24,18 @@ class FileManager:
         for subdir in subdirs:
             os.makedirs(os.path.join(self.output_dir, subdir), exist_ok=True)
     
+    def cleanup_empty_dirs(self):
+        """清理空的子目录"""
+        subdirs = ['gmm_params', 'raw_data']
+        for subdir in subdirs:
+            dir_path = os.path.join(self.output_dir, subdir)
+            if os.path.exists(dir_path) and not os.listdir(dir_path):
+                try:
+                    os.rmdir(dir_path)
+                    print(f"删除空目录: {dir_path}")
+                except OSError:
+                    pass  # 目录不为空或无法删除
+    
     def save_stats_summary(self, stats_dict, load_level=None):
         """保存统计摘要"""
         if not stats_dict:

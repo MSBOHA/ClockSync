@@ -293,8 +293,7 @@ def create_comparison_plots(original_stats, processed_stats, output_dir):
     
     plt.tight_layout()
     plt.savefig(output_dir / "avg_delay_cdf_comparison.png", dpi=300, bbox_inches='tight')
-    plt.close()
-      # 创建对数尺度的密度直方图和CDF对比
+    plt.close()    # 创建对数尺度的密度直方图和CDF对比
     fig_log, (ax_log1, ax_log2) = plt.subplots(1, 2, figsize=(16, 6))
     
     # 子图1: 对数尺度密度直方图对比
@@ -302,50 +301,49 @@ def create_comparison_plots(original_stats, processed_stats, output_dir):
     orig_data_pos = original_data[original_data > 0]
     proc_data_pos = processed_data[processed_data > 0]
     
-    ax_log1.hist(np.log10(orig_data_pos), bins=50, alpha=0.7, label='原始日志(log10,筛选后)', 
+    ax_log1.hist(np.log(orig_data_pos), bins=50, alpha=0.7, label='原始日志(ln,筛选后)', 
                  density=True, color='blue', edgecolor='black', linewidth=0.5)
-    ax_log1.hist(np.log10(proc_data_pos), bins=50, alpha=0.7, label='处理后日志(log10,筛选后)', 
+    ax_log1.hist(np.log(proc_data_pos), bins=50, alpha=0.7, label='处理后日志(ln,筛选后)', 
                  density=True, color='red', edgecolor='black', linewidth=0.5)
     
-    ax_log1.set_xlabel('平均时延 (log10 μs)')
+    ax_log1.set_xlabel('平均时延 (ln μs)')
     ax_log1.set_ylabel('密度')
-    ax_log1.set_title('平均时延分布密度直方图对比 (对数尺度，筛选后)')
+    ax_log1.set_title('平均时延分布密度直方图对比 (自然对数尺度，筛选后)')
     ax_log1.legend()
     ax_log1.grid(True, alpha=0.3)
     
     # 添加对数尺度统计信息
-    orig_log_mean = np.mean(np.log10(orig_data_pos))
-    orig_log_std = np.std(np.log10(orig_data_pos))
-    proc_log_mean = np.mean(np.log10(proc_data_pos))
-    proc_log_std = np.std(np.log10(proc_data_pos))
+    orig_log_mean = np.mean(np.log(orig_data_pos))
+    orig_log_std = np.std(np.log(orig_data_pos))
+    proc_log_mean = np.mean(np.log(proc_data_pos))
+    proc_log_std = np.std(np.log(proc_data_pos))
     
-    textstr_log = (f'原始日志(log10): μ={orig_log_mean:.3f}, σ={orig_log_std:.3f}\n'
-                   f'处理后日志(log10): μ={proc_log_mean:.3f}, σ={proc_log_std:.3f}')
+    textstr_log = (f'原始日志(ln): μ={orig_log_mean:.3f}, σ={orig_log_std:.3f}\n'
+                   f'处理后日志(ln): μ={proc_log_mean:.3f}, σ={proc_log_std:.3f}')
     ax_log1.text(0.02, 0.98, textstr_log, transform=ax_log1.transAxes, fontsize=10,
                  verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
     
     # 子图2: 对数尺度CDF对比
-    orig_data_log = np.sort(np.log10(orig_data_pos))
-    proc_data_log = np.sort(np.log10(proc_data_pos))
+    orig_data_log = np.sort(np.log(orig_data_pos))
+    proc_data_log = np.sort(np.log(proc_data_pos))
     
     orig_cdf_log = np.arange(1, len(orig_data_log) + 1) / len(orig_data_log)
     proc_cdf_log = np.arange(1, len(proc_data_log) + 1) / len(proc_data_log)
       # 计算对数尺度的KS统计量和KL散度
     ks_stat_log, p_value_log = ks_2samp(orig_data_log, proc_data_log)
     kl_divergence_log = compute_kl_divergence(orig_data_log, proc_data_log)
+    ax_log2.plot(orig_data_log, orig_cdf_log, label='原始日志(ln)', color='blue', linewidth=2)
+    ax_log2.plot(proc_data_log, proc_cdf_log, label='处理后日志(ln)', color='red', linewidth=2)
     
-    ax_log2.plot(orig_data_log, orig_cdf_log, label='原始日志(log10)', color='blue', linewidth=2)
-    ax_log2.plot(proc_data_log, proc_cdf_log, label='处理后日志(log10)', color='red', linewidth=2)
-    
-    ax_log2.set_xlabel('平均时延 (log10 μs)')
+    ax_log2.set_xlabel('平均时延 (ln μs)')
     ax_log2.set_ylabel('累积概率')
-    ax_log2.set_title('平均时延累积分布函数(CDF)对比 (对数尺度)')
+    ax_log2.set_title('平均时延累积分布函数(CDF)对比 (自然对数尺度)')
     ax_log2.legend()
     ax_log2.grid(True, alpha=0.3)
     
     # 添加对数尺度CDF统计信息，移除p值，添加KL散度
-    textstr_cdf_log = (f'对数尺度KS统计量: {ks_stat_log:.4f}\n'
-                       f'对数尺度KL散度: {kl_divergence_log:.4f}\n'
+    textstr_cdf_log = (f'自然对数尺度KS统计量: {ks_stat_log:.4f}\n'
+                       f'自然对数尺度KL散度: {kl_divergence_log:.4f}\n'
                        f'中位数差异: {np.median(proc_data_log) - np.median(orig_data_log):.3f}')
     ax_log2.text(0.02, 0.98, textstr_cdf_log, transform=ax_log2.transAxes, fontsize=10,
                  verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
@@ -356,18 +354,18 @@ def create_comparison_plots(original_stats, processed_stats, output_dir):
     
     # 单独保存对数尺度CDF图
     plt.figure(figsize=(10, 6))
-    plt.plot(orig_data_log, orig_cdf_log, label='原始日志(log10)', color='blue', linewidth=2)
-    plt.plot(proc_data_log, proc_cdf_log, label='处理后日志(log10)', color='red', linewidth=2)
+    plt.plot(orig_data_log, orig_cdf_log, label='原始日志(ln)', color='blue', linewidth=2)
+    plt.plot(proc_data_log, proc_cdf_log, label='处理后日志(ln)', color='red', linewidth=2)
     
-    plt.xlabel('平均时延 (log10 μs)')
+    plt.xlabel('平均时延 (ln μs)')
     plt.ylabel('累积概率')
-    plt.title('平均时延累积分布函数(CDF)对比 (对数尺度)')
+    plt.title('平均时延累积分布函数(CDF)对比 (自然对数尺度)')
     plt.legend()
-    plt.grid(True, alpha=0.3)
-      # 添加详细的对数尺度统计信息，移除p值，添加KL散度
-    textstr_detailed_log = (f'原始日志(log10): 中位数={np.median(orig_data_log):.3f}\n'
-                           f'处理后日志(log10): 中位数={np.median(proc_data_log):.3f}\n'                           f'对数尺度KS统计量: {ks_stat_log:.4f}\n'
-                           f'对数尺度KL散度: {kl_divergence_log:.4f}')
+    plt.grid(True, alpha=0.3)    # 添加详细的对数尺度统计信息，移除p值，添加KL散度
+    textstr_detailed_log = (f'原始日志(ln): 中位数={np.median(orig_data_log):.3f}\n'
+                           f'处理后日志(ln): 中位数={np.median(proc_data_log):.3f}\n'
+                           f'自然对数尺度KS统计量: {ks_stat_log:.4f}\n'
+                           f'自然对数尺度KL散度: {kl_divergence_log:.4f}')
     plt.text(0.02, 0.98, textstr_detailed_log, transform=plt.gca().transAxes, fontsize=10,
              verticalalignment='top', bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
     
@@ -378,8 +376,8 @@ def create_comparison_plots(original_stats, processed_stats, output_dir):
     print(f"平均时延分布对比图已保存到: {output_dir}")
     print(f"CDF最大差值: {ks_stat:.4f} (位置: {max_diff_x:.2f}μs)")
     print(f"KL散度: {kl_divergence:.4f}")
-    print(f"对数尺度KS统计量: {ks_stat_log:.4f}")
-    print(f"对数尺度KL散度: {kl_divergence_log:.4f}")
+    print(f"自然对数尺度KS统计量: {ks_stat_log:.4f}")
+    print(f"自然对数尺度KL散度: {kl_divergence_log:.4f}")
     
     return ks_stat, max_diff_x, kl_divergence
 
@@ -465,9 +463,9 @@ def generate_report(original_stats, processed_stats, comparison_df, output_dir, 
         report.append("")
         
         # 解释KS统计量的含义
-        if max_cdf_diff < 0.1:
+        if max_cdf_diff < 0.2:
             significance = "较小，两个分布相似"
-        elif max_cdf_diff < 0.3:
+        elif max_cdf_diff < 0.4:
             significance = "中等，两个分布有一定差异"
         else:
             significance = "较大，表明两个分布存在显著差异"

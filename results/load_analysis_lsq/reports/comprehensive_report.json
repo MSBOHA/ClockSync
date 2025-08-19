@@ -1,5 +1,5 @@
 {
-  "analysis_timestamp": "2025-06-23T14:09:45.159594",
+  "analysis_timestamp": "2025-06-23T19:05:43.742490",
   "config": {
     "fit_method": "lsq",
     "piecewise_fit": true,
@@ -169,6 +169,18 @@
             "original_std": 181.92164079498357
           }
         },
+        "cdf_comparison": {
+          "上行时延": {
+            "ks_statistic": 0.009873860136895618,
+            "kl_divergence": 0.0021796337758252346,
+            "n_samples": 18083
+          },
+          "下行时延": {
+            "ks_statistic": 0.006010692664576545,
+            "kl_divergence": -0.07982997137311969,
+            "n_samples": 18083
+          }
+        },
         "output_dir": "results/load_analysis_lsq\\load_100"
       },
       {
@@ -322,6 +334,18 @@
             "n_samples": 18965,
             "original_mean": 235.10194266193812,
             "original_std": 283.6366530838194
+          }
+        },
+        "cdf_comparison": {
+          "上行时延": {
+            "ks_statistic": 0.009913527692772095,
+            "kl_divergence": 0.35474343279427073,
+            "n_samples": 18965
+          },
+          "下行时延": {
+            "ks_statistic": 0.006087455970209654,
+            "kl_divergence": 0.06941474250233928,
+            "n_samples": 18965
           }
         },
         "output_dir": "results/load_analysis_lsq\\load_200"
@@ -479,6 +503,18 @@
             "original_std": 234.1921973287863
           }
         },
+        "cdf_comparison": {
+          "上行时延": {
+            "ks_statistic": 0.008912188194381387,
+            "kl_divergence": -0.011464076923029871,
+            "n_samples": 18908
+          },
+          "下行时延": {
+            "ks_statistic": 0.03264848316532787,
+            "kl_divergence": 0.021365857540045684,
+            "n_samples": 18908
+          }
+        },
         "output_dir": "results/load_analysis_lsq\\load_300"
       },
       {
@@ -632,6 +668,18 @@
             "n_samples": 18775,
             "original_mean": 210.46519434995562,
             "original_std": 220.1612576846414
+          }
+        },
+        "cdf_comparison": {
+          "上行时延": {
+            "ks_statistic": 0.009836522081592802,
+            "kl_divergence": 0.04207450083524152,
+            "n_samples": 18775
+          },
+          "下行时延": {
+            "ks_statistic": 0.011227271404739558,
+            "kl_divergence": 0.01821293140624124,
+            "n_samples": 18775
           }
         },
         "output_dir": "results/load_analysis_lsq\\load_400"
@@ -789,6 +837,18 @@
             "original_std": 242.04583171825985
           }
         },
+        "cdf_comparison": {
+          "上行时延": {
+            "ks_statistic": 0.009743127490705161,
+            "kl_divergence": 0.015416737404945887,
+            "n_samples": 18891
+          },
+          "下行时延": {
+            "ks_statistic": 0.016406301240750598,
+            "kl_divergence": 0.019981977711441386,
+            "n_samples": 18891
+          }
+        },
         "output_dir": "results/load_analysis_lsq\\load_500"
       },
       {
@@ -942,6 +1002,18 @@
             "n_samples": 18793,
             "original_mean": 347.3669238210435,
             "original_std": 312.51323796107323
+          }
+        },
+        "cdf_comparison": {
+          "上行时延": {
+            "ks_statistic": 0.00657677868645834,
+            "kl_divergence": -0.04011245430262324,
+            "n_samples": 18793
+          },
+          "下行时延": {
+            "ks_statistic": 0.014375230798984812,
+            "kl_divergence": 0.01645999268477754,
+            "n_samples": 18793
           }
         },
         "output_dir": "results/load_analysis_lsq\\load_600"
