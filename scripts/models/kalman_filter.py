@@ -59,7 +59,30 @@ kalman_P = np.array([[1e-2, 0],
 # 存储卡尔曼滤波器的估计值
 kalman_estimated_offsets = []
 kalman_estimated_freq_offsets = []
+# ...existing code...
 
+# OU噪声参数（可根据需要调整）
+ou_theta = 0.0          # OU过程的均值
+ou_tau = 1000           # 时间常数（秒），决定回归均值的快慢
+ou_sigma = np.sqrt(sigma_gamma_sq)  # OU过程的强度
+
+# 初始化OU过程的频率噪声分量
+ou_freq_noise = 0.0
+
+# --- 4. 仿真循环 ---
+# for k in range(num_steps):
+#     # a. 生成真实时钟行为
+#     # 偏移项仍用高斯白噪声
+#     phase_noise = np.random.normal(0, np.sqrt(Q[0,0]))
+#     # 频率项用OU过程
+#     ou_freq_noise += (ou_theta - ou_freq_noise) * (Delta_t / ou_tau) \
+#                      + ou_sigma * np.sqrt(Delta_t) * np.random.normal(0, 1)
+#     process_noise = np.array([[phase_noise],
+#                               [ou_freq_noise]])
+    
+#     # 真实状态更新
+#     true_x = np.dot(A, true_x) + process_noise
+    # ...existing code...
 # --- 4. 仿真循环 ---
 for k in range(num_steps):
     # a. 生成真实时钟行为

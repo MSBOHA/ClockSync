@@ -224,7 +224,7 @@ def calculate_stats_from_log(filepath, label, time_range_filter=None, skip_rows_
     }
 
 
-def main(top_n_to_plot=5, rows_to_skip_default=0):
+def main(top_n_to_plot=9, rows_to_skip_default=0):
     """
     主函数：查找日志文件，处理它们，排序并生成图表和统计表。
     :param top_n_to_plot: 要绘制误差变化图的最佳参数组合数量。
@@ -237,21 +237,22 @@ def main(top_n_to_plot=5, rows_to_skip_default=0):
     chrony_log_basename = "timeError.log" # Chrony 日志的特定文件名
     chrony_log_full_path = os.path.abspath(os.path.join(log_dir, chrony_log_basename))
 
-    all_potential_log_files = glob.glob(os.path.join(log_dir, "timeError_*.log"))
+    all_log_files_in_dir = glob.glob(os.path.join(log_dir, "*.log")) # Get all .log files
 
     own_method_log_files = []
     found_chrony_log_path = None
 
-    for file_path in all_potential_log_files:
-        if os.path.abspath(file_path) == chrony_log_full_path:
-            found_chrony_log_path = file_path
-        else:
-            # 确保这里不会把 chrony_log_basename （如果它符合 timeError_*.log 模式但又不是我们指定的那个）错误地加入
-            if not os.path.basename(file_path) == chrony_log_basename:
-                 own_method_log_files.append(file_path)
+    for file_path_str in all_log_files_in_dir:
+        current_file_abs_path = os.path.abspath(file_path_str)
+        current_file_basename = os.path.basename(current_file_abs_path)
+
+        if current_file_abs_path == chrony_log_full_path:
+            found_chrony_log_path = current_file_abs_path
+        elif current_file_basename.startswith("timeError_"): # Ensure it's an "own method" log
+            own_method_log_files.append(current_file_abs_path)
 
     if not own_method_log_files and not found_chrony_log_path:
-        print(f"No 'timeError_*.log' files found in the target data directory: {log_dir}")
+        print(f"No 'timeError_*.log' files or '{chrony_log_basename}' found in the target data directory: {log_dir}")
         return
 
     print("Starting processing of 'Own Method' timeError log files...")
@@ -285,8 +286,8 @@ def main(top_n_to_plot=5, rows_to_skip_default=0):
             chrony_result_data = chrony_stats
         else:
             print(f"  Skipping Chrony log (File: {os.path.basename(found_chrony_log_path)}) due to processing issues or no valid RMS Offset.")
-    elif chrony_log_basename == "timeError.log": # Only print if it was the default expected name
-        print(f"\nChrony log file '{chrony_log_basename}' not found in {log_dir}.")
+    else: # If found_chrony_log_path is None
+        print(f"\\nChrony log file '{chrony_log_basename}' not found in {log_dir}.")
 
     # 准备用于统计摘要和排序的数据
     results_for_summary = list(all_own_method_results)
@@ -343,11 +344,11 @@ def main(top_n_to_plot=5, rows_to_skip_default=0):
             num_to_plot_actually = len(results_to_plot_own)
             
             if num_to_plot_actually <= 8:
-                colors_cmap = plt.cm.get_cmap('Dark2', num_to_plot_actually if num_to_plot_actually > 0 else 1)
+                colors_cmap = plt.get_cmap('Dark2', num_to_plot_actually if num_to_plot_actually > 0 else 1)
             elif num_to_plot_actually <= 9:
-                colors_cmap = plt.cm.get_cmap('Set1', num_to_plot_actually if num_to_plot_actually > 0 else 1)
+                colors_cmap = plt.get_cmap('Set1', num_to_plot_actually if num_to_plot_actually > 0 else 1)
             else:
-                colors_cmap = plt.cm.get_cmap('tab10', num_to_plot_actually if num_to_plot_actually > 0 else 1)
+                colors_cmap = plt.get_cmap('tab10', num_to_plot_actually if num_to_plot_actually > 0 else 1)
 
             print(f"\nPlotting top {num_to_plot_actually} 'Own Method' results based on RMS Offset...")
             for i, result in enumerate(results_to_plot_own):
@@ -356,11 +357,14 @@ def main(top_n_to_plot=5, rows_to_skip_default=0):
                 color_val = colors_cmap(i % colors_cmap.N if colors_cmap.N > 0 else 0.5)
                 plt.plot(df_to_plot['time_adjusted'], df_to_plot['error'], label=plot_label, color=color_val, 
                          marker='.', linestyle='-', markersize=2, linewidth=0.7, alpha=0.8)      
-
+            #设置x轴和y轴标签大小
+            plt.xticks(fontsize=20)
+            plt.yticks(fontsize=20)
             plt.xlabel('Sample Index') 
             plt.ylabel('Time Offset (µs)') 
-            plt.title(f'Top {num_to_plot_actually} Own Method Time Offset Comparison (Sorted by RMS Offset)')
-            plt.legend(loc='best', ncol=2 if num_to_plot_actually > 10 else 1, fontsize='small' if num_to_plot_actually > 10 else 'medium')
+            
+            plt.title(f'Top {num_to_plot_actually} Own Method Time Offset Comparison (Sorted by RMS Offset)', fontsize=20)
+            plt.legend(loc='best', ncol=2 if num_to_plot_actually > 10 else 1, fontsize=20)
             plt.grid(True, which='both', linestyle='--', linewidth=0.5)
             plt.tight_layout()
             
@@ -385,13 +389,14 @@ def main(top_n_to_plot=5, rows_to_skip_default=0):
         plt.plot(df_chrony['time_adjusted'], df_chrony['error'], label=label_chrony, color='green',
                  marker='.', linestyle='-', markersize=2, linewidth=0.7, alpha=0.8)
         
-        plt.xlabel('Sample Index')
-        plt.ylabel('Time Offset (µs)')
-        plt.title('Chrony Time Offset (Sorted by RMS Offset)')
-        plt.legend(loc='best')
+        plt.xlabel('Sample Index',fontsize=20)
+        plt.ylabel('Time Offset (µs)',fontsize=20)
+        plt.title('Chrony Time Offset (Sorted by RMS Offset)', fontsize=20)
+        plt.legend(loc='best', fontsize=12)
         plt.grid(True, which='both', linestyle='--', linewidth=0.5)
         plt.tight_layout()
-
+        plt.xticks(fontsize=20)
+        plt.yticks(fontsize=20)
         chrony_plot_svg_path = os.path.join(output_results_dir, "chrony_time_offset_rms.svg")
         chrony_plot_png_path = os.path.join(output_results_dir, "chrony_time_offset_rms.png")
         os.makedirs(os.path.dirname(chrony_plot_svg_path), exist_ok=True)
@@ -413,20 +418,21 @@ def main(top_n_to_plot=5, rows_to_skip_default=0):
         
         # 绘制最佳自有方法
         df_best_own = best_own_method_for_comparison['df']
-        label_best_own = f"Best Own: {best_own_method_for_comparison['label']} (RMS: {best_own_method_for_comparison['rms_offset']:.3f} µs)"
+        label_best_own = f"Best Own: {best_own_method_for_comparison['label']} (RMSE: {best_own_method_for_comparison['rms_offset']:.3f} µs)"
         plt.plot(df_best_own['time_adjusted'], df_best_own['error'], label=label_best_own, color='blue',
                  marker='.', linestyle='-', markersize=2, linewidth=0.7, alpha=0.8)
-                 
+        plt.xticks(fontsize=20)
+        plt.yticks(fontsize=20)
         # 绘制 Chrony
         df_chrony = chrony_result_data['df']
-        label_chrony = f"Chrony (RMS: {chrony_result_data['rms_offset']:.3f} µs)"
+        label_chrony = f"Chrony (RMSE: {chrony_result_data['rms_offset']:.3f} µs)"
         plt.plot(df_chrony['time_adjusted'], df_chrony['error'], label=label_chrony, color='red',
                  marker='.', linestyle='-', markersize=2, linewidth=0.7, alpha=0.8)
 
-        plt.xlabel('Sample Index')
-        plt.ylabel('Time Offset (µs)')
-        plt.title('Comparison: Best Own Method (by RMS) vs. Chrony (by RMS)')
-        plt.legend(loc='best')
+        plt.xlabel('Sample Index', fontsize=20)
+        plt.ylabel('Time Offset (µs)', fontsize=20)
+        plt.title('Comparison: Best Own Method (by RMSE) vs. Chrony (by RMSE)', fontsize=20)
+        plt.legend(loc='best', fontsize=20)
         plt.grid(True, which='both', linestyle='--', linewidth=0.5)
         plt.tight_layout()
 
@@ -443,5 +449,5 @@ def main(top_n_to_plot=5, rows_to_skip_default=0):
         print("\nCannot create comparison plot: Chrony data not available or failed to process.")
 
 if __name__ == "__main__":
-    main(top_n_to_plot=5, rows_to_skip_default=0) # 默认不跳过行
+    main(top_n_to_plot=9, rows_to_skip_default=0) # 默认不跳过行
     # main(top_n_to_plot=5, rows_to_skip_default=10) # 如果自有方法日志通常需要跳过10行
